@@ -1,0 +1,16 @@
+{
+  "name": "volp-telegram-reminder-bot",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:init": "wrangler d1 execute volp-reminder-bot --remote --file schema.sql"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260726.1",
+    "typescript": "^7.0.2",
+    "wrangler": "^4.114.0"
+  }
+}

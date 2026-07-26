@@ -1,0 +1,17 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "volp-telegram-reminder-bot",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-26",
+  "triggers": {
+    "crons": ["*/15 * * * *"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "volp-reminder-bot",
+      "database_id": "PASTE_YOUR_D1_DATABASE_ID"
+    }
+  ]
+}
+
