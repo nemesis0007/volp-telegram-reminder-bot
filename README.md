@@ -7,15 +7,16 @@ A free, shared Telegram bot that checks VOLP for pending assignments and sends d
 - Private one-time connection link inside Telegram
 - Upcoming assignment list with `/assignments`
 - Manual refresh with `/sync`
+- Hourly assignment checks
 - Reminders 48 hours, 24 hours, 6 hours, and 90 minutes before deadlines
 - Complete credential and assignment deletion with `/disconnect`
 - Support for hands-on and subjective assignments
 
 ## Security model
 
-Users never type VOLP passwords into Telegram. The setup form is served over HTTPS by Cloudflare Workers. Passwords are validated directly with VOLP and encrypted using AES-256-GCM before being stored in D1.
+Users never type VOLP passwords into Telegram. The setup page sends the password directly from the user's browser to VOLP. The Worker never receives or stores it. Only VOLP's temporary session token is encrypted with AES-256-GCM and stored in D1.
 
-The bot operator controls the encryption key and can technically decrypt stored credentials. Only run a shared instance if users understand and accept this trust model. See [SECURITY.md](SECURITY.md).
+When VOLP expires a session, the user must reconnect. See [SECURITY.md](SECURITY.md).
 
 ## Free deployment
 
@@ -90,7 +91,7 @@ Open the bot in Telegram and send `/start`. Every user receives their own 15-min
 - VOLP has no documented public API. This project uses the same endpoints as its web client; they may change without notice.
 - The project is unaffiliated with VOLP or Vishwakarma Institute of Technology.
 - Do not use it to submit assignments or bypass access controls.
-- Respect Cloudflare and VOLP rate limits. The default sync interval is 15 minutes.
+- Respect Cloudflare and VOLP rate limits. The default sync interval is one hour.
 
 ## Development
 
@@ -104,4 +105,3 @@ Copy `wrangler.example.jsonc` to `wrangler.jsonc` and use `.dev.vars` for local 
 ## License
 
 MIT
-

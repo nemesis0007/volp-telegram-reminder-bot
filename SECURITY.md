@@ -6,8 +6,9 @@ Do not open a public issue for credential exposure, authentication bypass, or en
 
 ## Credential handling
 
-- VOLP passwords are accepted only through the HTTPS connection form.
-- Passwords are encrypted with AES-256-GCM using `CREDENTIAL_KEY`.
+- VOLP passwords are sent directly from the user's browser to VOLP.
+- The Worker never receives or stores VOLP passwords.
+- Temporary VOLP session tokens are encrypted with AES-256-GCM using `CREDENTIAL_KEY`.
 - The encryption key is stored as a Cloudflare Worker secret, separately from D1.
 - `/disconnect` deletes a user's account credentials and cached assignments.
 - One-time setup links expire after 15 minutes and are deleted after use.
@@ -15,7 +16,7 @@ Do not open a public issue for credential exposure, authentication bypass, or en
 
 ## Operator responsibility
 
-This is not end-to-end encryption. The person operating the Worker controls `CREDENTIAL_KEY` and can decrypt stored passwords. Operators must:
+This is not end-to-end encryption. The person operating the Worker controls `CREDENTIAL_KEY` and can decrypt stored VOLP session tokens. Operators must:
 
 - Clearly disclose this trust model to users.
 - Restrict Cloudflare account access and enable multi-factor authentication.
@@ -27,4 +28,3 @@ This is not end-to-end encryption. The person operating the Worker controls `CRE
 ## Limitations
 
 VOLP does not currently expose a documented public API for this use case. Upstream authentication and response formats can change. Failed syncs are isolated per user, but the operator should monitor service health.
-

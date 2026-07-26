@@ -36,7 +36,7 @@ function html(body: string, status = 200) {
       "content-type": "text/html; charset=utf-8",
       "cache-control": "no-store",
       "x-frame-options": "DENY",
-      "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'"
+      "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self' https://admin.volp.in; form-action 'self'; base-uri 'none'"
     }
   });
 }
@@ -115,13 +115,13 @@ async function credentialKey(secret: string) {
   return crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["encrypt", "decrypt"]);
 }
 
-async function encryptPassword(password: string, secret: string) {
+async function encryptSecret(value: string, secret: string) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const cipher = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await credentialKey(secret), new TextEncoder().encode(password));
+  const cipher = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await credentialKey(secret), new TextEncoder().encode(value));
   return `${bytesToBase64(iv)}.${bytesToBase64(new Uint8Array(cipher))}`;
 }
 
-async function decryptPassword(value: string, secret: string) {
+async function decryptSecret(value: string, secret: string) {
   const [iv, cipher] = value.split(".");
   const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: base64ToBytes(iv) }, await credentialKey(secret), base64ToBytes(cipher));
   return new TextDecoder().decode(plain);
@@ -161,7 +161,7 @@ async function handleCommand(env: Env, chatId: number, text: string, origin: str
     await env.DB.prepare("INSERT OR IGNORE INTO users(chat_id,created_at) VALUES(?,?)").bind(chatId, new Date().toISOString()).run();
     const link = await makeSetupLink(env, chatId, origin);
     return send(env, chatId,
-      `👋 <b>VOLP Assignment Reminder</b>\n\nConnect your VOLP account using the private link below. It expires in 15 minutes.\n\nYour password is sent over HTTPS and encrypted before storage.`,
+      `👋 <b>VOLP Assignment Reminder</b>\n\nConnect your VOLP account using the private link below. It expires in 15 minutes.\n\nYour password goes directly from your browser to VOLP. This bot never receives or stores it.`,
       { inline_keyboard: [[{ text: "Connect VOLP 🔐", url: link }]] });
   }
   if (command === "/assignments") {
@@ -244,11 +244,11 @@ async function fetchAssignments(session: VolpSession): Promise<Assignment[]> {
 }
 
 async function syncUser(env: Env, chatId: number) {
-  const account = await env.DB.prepare("SELECT username,encrypted_password FROM volp_accounts WHERE chat_id=?").bind(chatId).first<any>();
+  const account = await env.DB.prepare("SELECT uid,encrypted_token FROM volp_accounts WHERE chat_id=?").bind(chatId).first<any>();
   if (!account) throw new Error("VOLP account is not connected");
   try {
-    const password = await decryptPassword(account.encrypted_password, env.CREDENTIAL_KEY);
-    const session = await loginVolp(account.username, password);
+    const token = await decryptSecret(account.encrypted_token, env.CREDENTIAL_KEY);
+    const session = { token, uid: account.uid };
     const assignments = await fetchAssignments(session);
     const now = new Date().toISOString();
     for (const item of assignments) {
@@ -303,39 +303,83 @@ async function runScheduled(env: Env) {
 async function connectGet(env: Env, token: string) {
   const row = await env.DB.prepare("SELECT token FROM setup_tokens WHERE token=? AND expires_at>?").bind(token, new Date().toISOString()).first();
   if (!row) return html(page("<h1>Link expired</h1><p>Return to Telegram and send <b>/connect</b> for a new link.</p>"), 410);
-  return html(page(`<h1>Connect VOLP</h1>
-    <p>Enter the same credentials you use at classroom.volp.in.</p>
-    <form method="post" action="/connect">
-      <input type="hidden" name="token" value="${escapeHtml(token)}">
+  return html(page(`<h1>Connect through VOLP</h1>
+    <p>Your password is sent <b>directly to VOLP</b>. This bot receives only VOLP's temporary session token.</p>
+    <form id="connect-form">
+      <input type="hidden" id="setup-token" value="${escapeHtml(token)}">
       <label>VOLP username<input name="username" autocomplete="username" required maxlength="160"></label>
       <label>VOLP password<input type="password" name="password" autocomplete="current-password" required maxlength="300"></label>
-      <button type="submit">Connect securely</button>
+      <button type="submit">Sign in directly with VOLP</button>
     </form>
-    <p class="note">Credentials are validated directly with VOLP and encrypted with AES-GCM before storage. You can delete them anytime with /disconnect.</p>`));
+    <p id="status" class="note">The password never passes through this bot's server. You can disconnect anytime with /disconnect.</p>
+    <script>
+    const form = document.getElementById("connect-form");
+    const status = document.getElementById("status");
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const button = form.querySelector("button");
+      button.disabled = true;
+      status.textContent = "Contacting VOLP…";
+      const data = new FormData(form);
+      try {
+        const login = await fetch("https://admin.volp.in/login/process", {
+          method: "POST",
+          headers: {
+            "Accept": "application/json, text/plain, */*",
+            "Content-Type": "application/json;charset=utf-8",
+            "organization-code": "null",
+            "device": "Web",
+            "router-path": "/",
+            "latitude": "NA",
+            "longitude": "NA"
+          },
+          body: JSON.stringify({ username: data.get("username"), pwd: data.get("password") })
+        });
+        const auth = await login.json();
+        if (auth.flag !== "YES" || !auth.token) throw new Error("VOLP rejected the login");
+        const saved = await fetch("/connect-session", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            setupToken: document.getElementById("setup-token").value,
+            username: data.get("username"),
+            uid: auth.uid || data.get("username"),
+            volpToken: auth.token
+          })
+        });
+        if (!saved.ok) throw new Error("Could not save the VOLP session");
+        document.querySelector("main").innerHTML = "<h1>Connected ✅</h1><p>Your password was never shared with the bot. You can close this page and return to Telegram.</p>";
+      } catch (error) {
+        status.textContent = "Login failed or VOLP is unavailable. Please try again later.";
+        status.className = "error";
+        button.disabled = false;
+      }
+    });
+    </script>`));
 }
 
-async function connectPost(request: Request, env: Env) {
-  const form = await request.formData();
-  const token = String(form.get("token") ?? "");
-  const username = String(form.get("username") ?? "").trim();
-  const password = String(form.get("password") ?? "");
+async function connectSession(request: Request, env: Env) {
+  const body = await request.json<any>();
+  const token = String(body.setupToken ?? "");
+  const username = String(body.username ?? "").trim();
+  const uid = String(body.uid ?? "").trim();
+  const volpToken = String(body.volpToken ?? "");
   const setup = await env.DB.prepare("SELECT chat_id FROM setup_tokens WHERE token=? AND expires_at>?").bind(token, new Date().toISOString()).first<{ chat_id: number }>();
-  if (!setup || !username || !password) return html(page("<h1>Connection failed</h1><p class=error>The link expired or the form was incomplete. Send /connect in Telegram and try again.</p>"), 400);
+  if (!setup || !username || !uid || !volpToken) return json({ error: "Invalid or expired setup" }, 400);
   try {
-    await loginVolp(username, password);
-    const encrypted = await encryptPassword(password, env.CREDENTIAL_KEY);
+    await postVolp("https://learner.volp.in/learnerCourseDashboard/learnerCourseList", {}, { token: volpToken, uid }, "/learner/my-courses");
+    const encrypted = await encryptSecret(volpToken, env.CREDENTIAL_KEY);
     await env.DB.prepare(
-      `INSERT INTO volp_accounts(chat_id,username,encrypted_password,connected_at)
-       VALUES(?,?,?,?) ON CONFLICT(chat_id) DO UPDATE SET
-       username=excluded.username,encrypted_password=excluded.encrypted_password,
+      `INSERT INTO volp_accounts(chat_id,username,uid,encrypted_token,connected_at)
+       VALUES(?,?,?,?,?) ON CONFLICT(chat_id) DO UPDATE SET
+       username=excluded.username,uid=excluded.uid,encrypted_token=excluded.encrypted_token,
        connected_at=excluded.connected_at,last_error=NULL`
-    ).bind(setup.chat_id, username, encrypted, new Date().toISOString()).run();
+    ).bind(setup.chat_id, username, uid, encrypted, new Date().toISOString()).run();
     await env.DB.prepare("DELETE FROM setup_tokens WHERE token=?").bind(token).run();
-    await send(env, setup.chat_id, "✅ VOLP connected. I’ll check every 15 minutes.\n\nUse /assignments or /sync anytime.");
-    return html(page("<h1>Connected ✅</h1><p>You can close this page and return to Telegram.</p>"));
+    await send(env, setup.chat_id, "✅ VOLP connected without storing your password. I’ll check every hour.\n\nUse /assignments or /sync anytime.");
+    return json({ ok: true });
   } catch {
-    return html(page(`<h1>Connection failed</h1><p class="error">VOLP rejected the login or is temporarily unavailable.</p>
-      <p>Return to Telegram, send <b>/connect</b>, and try again.</p>`), 401);
+    return json({ error: "VOLP session validation failed" }, 401);
   }
 }
 
@@ -344,7 +388,7 @@ export default {
     const url = new URL(request.url);
     if (request.method === "GET" && url.pathname === "/health") return json({ ok: true });
     if (url.pathname === "/connect" && request.method === "GET") return connectGet(env, url.searchParams.get("token") ?? "");
-    if (url.pathname === "/connect" && request.method === "POST") return connectPost(request, env);
+    if (url.pathname === "/connect-session" && request.method === "POST") return connectSession(request, env);
     if (request.method !== "POST" || url.pathname !== `/webhook/${env.WEBHOOK_SECRET}`) return new Response("Not found", { status: 404 });
     if (request.headers.get("X-Telegram-Bot-Api-Secret-Token") !== env.WEBHOOK_SECRET) return new Response("Forbidden", { status: 403 });
     const update: any = await request.json();
@@ -355,4 +399,3 @@ export default {
     ctx.waitUntil(runScheduled(env));
   }
 };
-

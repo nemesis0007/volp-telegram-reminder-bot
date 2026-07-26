@@ -13,7 +13,8 @@ CREATE TABLE IF NOT EXISTS setup_tokens (
 CREATE TABLE IF NOT EXISTS volp_accounts (
   chat_id INTEGER PRIMARY KEY,
   username TEXT NOT NULL,
-  encrypted_password TEXT NOT NULL,
+  uid TEXT NOT NULL,
+  encrypted_token TEXT NOT NULL,
   connected_at TEXT NOT NULL,
   last_sync_at TEXT,
   last_error TEXT,
@@ -40,4 +41,3 @@ CREATE TABLE IF NOT EXISTS sent_notifications (
   sent_at TEXT NOT NULL,
   PRIMARY KEY(chat_id, assignment_key, threshold_minutes)
 );
-

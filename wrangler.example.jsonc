@@ -4,7 +4,7 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-07-26",
   "triggers": {
-    "crons": ["*/15 * * * *"]
+    "crons": ["0 * * * *"]
   },
   "d1_databases": [
     {
@@ -14,4 +14,3 @@
     }
   ]
 }
-
