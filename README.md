@@ -2,13 +2,19 @@
 
 A free, shared Telegram bot that checks VOLP for pending assignments and sends deadline reminders.
 
+## Use the hosted bot
+
+[Open the VOLP Assignment Reminder in Telegram](https://volp-telegram-reminder-bot.physiotwin-numenors.workers.dev/bot), send `/start`, and connect VOLP using the private 15-minute link. No installation is required.
+
 ## What users get
 
 - Private one-time connection link inside Telegram
 - Upcoming assignment list with `/assignments`
 - Manual refresh with `/sync`
 - Hourly assignment checks
-- Reminders 48 hours, 24 hours, 6 hours, and 90 minutes before deadlines
+- A personal reminder choice: 1 hour, 1.5 hours, or 2 hours before deadlines
+- Settings buttons with `/settings`
+- An in-bot privacy and project summary with `/about`
 - Complete credential and assignment deletion with `/disconnect`
 - Support for hands-on and subjective assignments
 
@@ -70,7 +76,7 @@ Copy the deployed Worker URL. Register the Telegram webhook without printing you
 ```bash
 curl -X POST "https://api.telegram.org/bot<YOUR_TOKEN>/setWebhook" \
   -H "Content-Type: application/json" \
-  -d '{"url":"https://YOUR-WORKER.workers.dev/webhook/YOUR_WEBHOOK_SECRET","secret_token":"YOUR_WEBHOOK_SECRET","allowed_updates":["message"]}'
+  -d '{"url":"https://YOUR-WORKER.workers.dev/webhook/YOUR_WEBHOOK_SECRET","secret_token":"YOUR_WEBHOOK_SECRET","allowed_updates":["message","callback_query"]}'
 ```
 
 Delete the command from your terminal history afterward, or use a local script that reads secrets from hidden prompts.
@@ -84,6 +90,8 @@ Open the bot in Telegram and send `/start`. Every user receives their own 15-min
 - `/start` or `/connect` — create a private VOLP setup link
 - `/assignments` — list upcoming assignments
 - `/sync` — check VOLP immediately
+- `/settings` — choose a 1-hour, 1.5-hour, or 2-hour reminder
+- `/about` — view how the bot works, its privacy model, and source link
 - `/disconnect` — permanently delete stored credentials and assignment data
 
 ## Important notes

@@ -14,6 +14,7 @@ type Assignment = {
   dueAt: Date;
   submitted: boolean;
 };
+type ReminderMinutes = 60 | 90 | 120;
 
 const BASE_HEADERS: Record<string, string> = {
   Accept: "application/json, text/plain, */*",
@@ -23,7 +24,9 @@ const BASE_HEADERS: Record<string, string> = {
   Origin: "https://classroom.volp.in",
   Referer: "https://classroom.volp.in/"
 };
-const REMINDER_MINUTES = [2880, 1440, 360, 90];
+const DEFAULT_REMINDER_MINUTES: ReminderMinutes = 90;
+const REMINDER_OPTIONS: ReminderMinutes[] = [60, 90, 120];
+const REPOSITORY_URL = "https://github.com/nemesis0007/volp-telegram-reminder-bot";
 
 function json(data: unknown, status = 200) {
   return Response.json(data, { status });
@@ -93,12 +96,6 @@ async function postVolp(url: string, body: unknown, session?: VolpSession, route
   return response.json<any>();
 }
 
-async function loginVolp(username: string, password: string): Promise<VolpSession> {
-  const data = await postVolp("https://admin.volp.in/login/process", { username, pwd: password });
-  if (data.flag !== "YES" || !data.token) throw new Error("VOLP rejected those credentials");
-  return { token: data.token, uid: data.uid || username };
-}
-
 function bytesToBase64(bytes: Uint8Array) {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
@@ -137,6 +134,32 @@ async function telegram(env: Env, method: string, body: Record<string, unknown>)
   return response.json();
 }
 
+async function configureTelegram(env: Env, origin: string) {
+  await Promise.all([
+    telegram(env, "setMyCommands", {
+      commands: [
+        { command: "connect", description: "Connect or reconnect your VOLP account" },
+        { command: "assignments", description: "View upcoming assignments" },
+        { command: "sync", description: "Check VOLP now" },
+        { command: "settings", description: "Choose reminder timing" },
+        { command: "about", description: "About this bot and its privacy" },
+        { command: "disconnect", description: "Delete your VOLP connection and data" }
+      ]
+    }),
+    telegram(env, "setMyDescription", {
+      description: "Checks VOLP every hour for upcoming assignments and sends private deadline reminders at the time you choose."
+    }),
+    telegram(env, "setMyShortDescription", {
+      short_description: "Hourly VOLP assignment checks with personal deadline reminders."
+    }),
+    telegram(env, "setWebhook", {
+      url: `${origin}/webhook/${env.WEBHOOK_SECRET}`,
+      secret_token: env.WEBHOOK_SECRET,
+      allowed_updates: ["message", "callback_query"]
+    })
+  ]);
+}
+
 async function send(env: Env, chatId: number, text: string, replyMarkup?: unknown) {
   return telegram(env, "sendMessage", {
     chat_id: chatId,
@@ -155,14 +178,57 @@ async function makeSetupLink(env: Env, chatId: number, origin: string) {
   return `${origin}/connect?token=${token}`;
 }
 
+function reminderKeyboard(current?: number) {
+  return {
+    inline_keyboard: [
+      REMINDER_OPTIONS.map((minutes) => ({
+        text: `${minutes === 90 ? "1.5" : minutes / 60} hour${minutes === 60 ? "" : "s"}${current === minutes ? " ✓" : ""}`,
+        callback_data: `reminder:${minutes}`
+      }))
+    ]
+  };
+}
+
+async function showSettings(env: Env, chatId: number) {
+  const user = await env.DB.prepare("SELECT reminder_minutes FROM users WHERE chat_id=?").bind(chatId).first<{ reminder_minutes: number }>();
+  const current = user?.reminder_minutes ?? DEFAULT_REMINDER_MINUTES;
+  return send(
+    env,
+    chatId,
+    `⚙️ <b>Reminder timing</b>\n\nCurrent setting: <b>${current === 90 ? "1.5" : current / 60} hour${current === 60 ? "" : "s"} before the deadline</b>.\n\nChoose when you want your reminder:`,
+    reminderKeyboard(current)
+  );
+}
+
+async function handleCallback(env: Env, callback: any) {
+  const chatId = callback.message?.chat?.id;
+  const match = String(callback.data ?? "").match(/^reminder:(60|90|120)$/);
+  if (!chatId || !match) {
+    return telegram(env, "answerCallbackQuery", { callback_query_id: callback.id });
+  }
+  const minutes = Number(match[1]) as ReminderMinutes;
+  await env.DB.prepare(
+    `INSERT INTO users(chat_id,created_at,reminder_minutes) VALUES(?,?,?)
+     ON CONFLICT(chat_id) DO UPDATE SET reminder_minutes=excluded.reminder_minutes`
+  ).bind(chatId, new Date().toISOString(), minutes).run();
+  await telegram(env, "answerCallbackQuery", {
+    callback_query_id: callback.id,
+    text: `Reminder set to ${minutes === 90 ? "1.5" : minutes / 60} hour${minutes === 60 ? "" : "s"} before`
+  });
+  return showSettings(env, chatId);
+}
+
 async function handleCommand(env: Env, chatId: number, text: string, origin: string) {
   const command = text.trim().split(/\s+/)[0].split("@")[0].toLowerCase();
   if (command === "/start" || command === "/connect") {
-    await env.DB.prepare("INSERT OR IGNORE INTO users(chat_id,created_at) VALUES(?,?)").bind(chatId, new Date().toISOString()).run();
+    if (command === "/start") await configureTelegram(env, origin);
+    await env.DB.prepare(
+      "INSERT OR IGNORE INTO users(chat_id,created_at,reminder_minutes) VALUES(?,?,?)"
+    ).bind(chatId, new Date().toISOString(), DEFAULT_REMINDER_MINUTES).run();
     const link = await makeSetupLink(env, chatId, origin);
     return send(env, chatId,
       `👋 <b>VOLP Assignment Reminder</b>\n\nConnect your VOLP account using the private link below. It expires in 15 minutes.\n\nYour password goes directly from your browser to VOLP. This bot never receives or stores it.`,
-      { inline_keyboard: [[{ text: "Connect VOLP 🔐", url: link }]] });
+      { inline_keyboard: [[{ text: "Connect VOLP 🔐", url: link }], [{ text: "Choose reminder time", callback_data: "reminder:90" }]] });
   }
   if (command === "/assignments") {
     const rows = await env.DB.prepare(
@@ -177,6 +243,16 @@ async function handleCommand(env: Env, chatId: number, text: string, origin: str
     await syncUser(env, chatId);
     return handleCommand(env, chatId, "/assignments", origin);
   }
+  if (command === "/settings" || command === "/reminder") {
+    return showSettings(env, chatId);
+  }
+  if (command === "/about") {
+    return send(
+      env,
+      chatId,
+      `ℹ️ <b>About VOLP Assignment Reminder</b>\n\nI check VOLP every hour, list upcoming hands-on and subjective assignments, and remind each user at their chosen time.\n\nPasswords go directly from the browser to VOLP and are never received or stored by this bot. VOLP session tokens are encrypted.\n\nOpen-source and unaffiliated with VOLP or VIT.\n\n<a href="${REPOSITORY_URL}">View source code on GitHub</a>`
+    );
+  }
   if (command === "/disconnect") {
     await env.DB.batch([
       env.DB.prepare("DELETE FROM volp_accounts WHERE chat_id=?").bind(chatId),
@@ -185,13 +261,36 @@ async function handleCommand(env: Env, chatId: number, text: string, origin: str
     ]);
     return send(env, chatId, "Your stored VOLP credentials and assignment data were deleted.");
   }
-  return send(env, chatId, "Commands: /connect, /assignments, /sync, /disconnect");
+  return send(env, chatId, "Commands: /connect, /assignments, /sync, /settings, /about, /disconnect");
+}
+
+function collectHandsOn(
+  found: Assignment[],
+  items: any[],
+  course: { colid: string | number; name: string },
+  fallbackId: string | number
+) {
+  for (const item of items) {
+    const dueAt = parseDueDate(item.duedate);
+    if (!dueAt) continue;
+    found.push({
+      key: `hands:${course.colid}:${item.ass_id ?? item.id ?? fallbackId}:${dueAt.toISOString()}`,
+      title: stripHtml(item.assignment_text) || "Hands-on assignment",
+      course: course.name,
+      type: "Hands-on",
+      dueAt,
+      submitted: Boolean(item.filePath || item.isevaluated)
+    });
+  }
 }
 
 async function fetchAssignments(session: VolpSession): Promise<Assignment[]> {
   const courseData = await postVolp(
     "https://learner.volp.in/learnerCourseDashboard/learnerCourseList", {}, session, "/learner/my-courses"
   );
+  if (!Array.isArray(courseData.col_list)) {
+    throw new Error("VOLP session expired. Use /connect to reconnect.");
+  }
   // VOLP reports some newly registered/current courses with a falsy
   // course_status even though they are available to the learner.
   const courses = (courseData.col_list ?? []).filter((course: any) => !course.is_archived);
@@ -206,8 +305,13 @@ async function fetchAssignments(session: VolpSession): Promise<Assignment[]> {
       "https://learner.volp.in/learnerCourseContent/courseContentData",
       { colid: course.colid }, session, "/learner-course-content"
     );
-    const courseId = content.course_id || course.crsid;
-    if ((content.course_level?.assigns?.hands ?? []).length && courseId) {
+    const courseId =
+      content.course_id ||
+      course.crsid ||
+      course.course_id ||
+      course.course?.course_id ||
+      course.course?.crsid;
+    if (courseId && (content.course_level?.assigns?.hands?.length ?? 0) > 0) {
       const data = await postVolp(
         "https://learner.volp.in/HandOnAssignment/getHandsOnDetails",
         {
@@ -217,18 +321,7 @@ async function fetchAssignments(session: VolpSession): Promise<Assignment[]> {
         },
         session, "/learner-handson-assignment"
       );
-      for (const item of data.ass_list ?? []) {
-        const dueAt = parseDueDate(item.duedate);
-        if (!dueAt) continue;
-        found.push({
-          key: `hands:${course.colid}:${item.ass_id ?? item.id ?? courseId}:${dueAt.toISOString()}`,
-          title: stripHtml(item.assignment_text) || "Hands-on assignment",
-          course: courseName,
-          type: "Hands-on",
-          dueAt,
-          submitted: Boolean(item.filePath || item.isevaluated)
-        });
-      }
+      collectHandsOn(found, data.ass_list ?? [], { colid: course.colid, name: courseName }, courseId);
     }
     for (const unit of content.unit_level ?? []) {
       if (!(unit.assigns?.hands ?? []).length) continue;
@@ -237,18 +330,7 @@ async function fetchAssignments(session: VolpSession): Promise<Assignment[]> {
         { course_offering_learner_id: course.colid, outline: unit.unit_id, type: "content" },
         session, "/learner-handson-assignment"
       );
-      for (const item of data.ass_list ?? []) {
-        const dueAt = parseDueDate(item.duedate);
-        if (!dueAt) continue;
-        found.push({
-          key: `hands:${course.colid}:${item.ass_id ?? item.id ?? unit.unit_id}:${dueAt.toISOString()}`,
-          title: stripHtml(item.assignment_text) || "Hands-on assignment",
-          course: courseName,
-          type: "Hands-on",
-          dueAt,
-          submitted: Boolean(item.filePath || item.isevaluated)
-        });
-      }
+      collectHandsOn(found, data.ass_list ?? [], { colid: course.colid, name: courseName }, unit.unit_id);
     }
     if (!courseId) continue;
     const subjective = await postVolp(
@@ -280,15 +362,16 @@ async function syncUser(env: Env, chatId: number) {
     const session = { token, uid: account.uid };
     const assignments = await fetchAssignments(session);
     const now = new Date().toISOString();
-    for (const item of assignments) {
-      await env.DB.prepare(
+    const writes = assignments.map((item) =>
+      env.DB.prepare(
         `INSERT INTO assignments(chat_id,assignment_key,title,course,assignment_type,due_at,submitted,updated_at)
          VALUES(?,?,?,?,?,?,?,?)
          ON CONFLICT(chat_id,assignment_key) DO UPDATE SET
          title=excluded.title,course=excluded.course,assignment_type=excluded.assignment_type,
          due_at=excluded.due_at,submitted=excluded.submitted,updated_at=excluded.updated_at`
-      ).bind(chatId, item.key, item.title, item.course, item.type, item.dueAt.toISOString(), item.submitted ? 1 : 0, now).run();
-    }
+      ).bind(chatId, item.key, item.title, item.course, item.type, item.dueAt.toISOString(), item.submitted ? 1 : 0, now)
+    );
+    if (writes.length) await env.DB.batch(writes);
     await env.DB.prepare("UPDATE volp_accounts SET last_sync_at=?,last_error=NULL WHERE chat_id=?").bind(now, chatId).run();
   } catch (error) {
     const message = error instanceof Error ? error.message.slice(0, 200) : "Sync failed";
@@ -297,31 +380,32 @@ async function syncUser(env: Env, chatId: number) {
   }
 }
 
-async function sendDueReminders(env: Env, chatId: number) {
+async function sendDueReminders(env: Env, chatId: number, threshold: number) {
   const rows = await env.DB.prepare(
     "SELECT assignment_key,title,course,assignment_type,due_at FROM assignments WHERE chat_id=? AND submitted=0 AND due_at>?"
   ).bind(chatId, new Date().toISOString()).all<any>();
   for (const item of rows.results) {
     const remaining = Math.floor((new Date(item.due_at).getTime() - Date.now()) / 60_000);
-    for (const threshold of REMINDER_MINUTES) {
-      if (remaining > threshold) continue;
-      const marked = await env.DB.prepare(
-        "INSERT OR IGNORE INTO sent_notifications(chat_id,assignment_key,threshold_minutes,sent_at) VALUES(?,?,?,?)"
-      ).bind(chatId, item.assignment_key, threshold, new Date().toISOString()).run();
-      if (marked.meta.changes !== 1) continue;
-      const label = threshold >= 1440 ? `${threshold / 1440} day${threshold > 1440 ? "s" : ""}` : `${threshold / 60} hours`;
-      await send(env, chatId,
-        `⏰ <b>Assignment due in ${label}</b>\n\n<b>${escapeHtml(item.title)}</b>\n${escapeHtml(item.course)} · ${escapeHtml(item.assignment_type)}\nDue: ${new Date(item.due_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}`);
-    }
+    if (remaining > threshold) continue;
+    const marked = await env.DB.prepare(
+      "INSERT OR IGNORE INTO sent_notifications(chat_id,assignment_key,threshold_minutes,sent_at) VALUES(?,?,?,?)"
+    ).bind(chatId, item.assignment_key, threshold, new Date().toISOString()).run();
+    if (marked.meta.changes !== 1) continue;
+    const label = threshold === 90 ? "1.5 hours" : `${threshold / 60} hour${threshold === 60 ? "" : "s"}`;
+    await send(env, chatId,
+      `⏰ <b>Assignment due in ${label}</b>\n\n<b>${escapeHtml(item.title)}</b>\n${escapeHtml(item.course)} · ${escapeHtml(item.assignment_type)}\nDue: ${new Date(item.due_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}`);
   }
 }
 
 async function runScheduled(env: Env) {
-  const accounts = await env.DB.prepare("SELECT chat_id FROM volp_accounts").all<{ chat_id: number }>();
+  const accounts = await env.DB.prepare(
+    `SELECT a.chat_id, COALESCE(u.reminder_minutes, ?) AS reminder_minutes
+     FROM volp_accounts a LEFT JOIN users u ON u.chat_id=a.chat_id`
+  ).bind(DEFAULT_REMINDER_MINUTES).all<{ chat_id: number; reminder_minutes: number }>();
   for (const account of accounts.results) {
     try {
       await syncUser(env, account.chat_id);
-      await sendDueReminders(env, account.chat_id);
+      await sendDueReminders(env, account.chat_id, account.reminder_minutes);
     } catch {
       // Error is stored per account; one unavailable account must not stop others.
     }
@@ -405,7 +489,12 @@ async function connectSession(request: Request, env: Env) {
        connected_at=excluded.connected_at,last_error=NULL`
     ).bind(setup.chat_id, username, uid, encrypted, new Date().toISOString()).run();
     await env.DB.prepare("DELETE FROM setup_tokens WHERE token=?").bind(token).run();
-    await send(env, setup.chat_id, "✅ VOLP connected without storing your password. I’ll check every hour.\n\nUse /assignments or /sync anytime.");
+    await send(
+      env,
+      setup.chat_id,
+      "✅ VOLP connected without storing your password. I’ll check every hour.\n\nUse /assignments, /sync, or /settings anytime.",
+      reminderKeyboard(DEFAULT_REMINDER_MINUTES)
+    );
     return json({ ok: true });
   } catch {
     return json({ error: "VOLP session validation failed" }, 401);
@@ -416,12 +505,18 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === "GET" && url.pathname === "/health") return json({ ok: true });
+    if (request.method === "GET" && url.pathname === "/bot") {
+      await configureTelegram(env, url.origin);
+      const info: any = await telegram(env, "getMe", {});
+      return Response.redirect(`https://t.me/${info.result.username}`, 302);
+    }
     if (url.pathname === "/connect" && request.method === "GET") return connectGet(env, url.searchParams.get("token") ?? "");
     if (url.pathname === "/connect-session" && request.method === "POST") return connectSession(request, env);
     if (request.method !== "POST" || url.pathname !== `/webhook/${env.WEBHOOK_SECRET}`) return new Response("Not found", { status: 404 });
     if (request.headers.get("X-Telegram-Bot-Api-Secret-Token") !== env.WEBHOOK_SECRET) return new Response("Forbidden", { status: 403 });
     const update: any = await request.json();
     if (update.message?.text) await handleCommand(env, update.message.chat.id, update.message.text, url.origin);
+    if (update.callback_query) await handleCallback(env, update.callback_query);
     return new Response("ok");
   },
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {

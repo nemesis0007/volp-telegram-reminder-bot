@@ -1,6 +1,7 @@
 CREATE TABLE IF NOT EXISTS users (
   chat_id INTEGER PRIMARY KEY,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  reminder_minutes INTEGER NOT NULL DEFAULT 90 CHECK(reminder_minutes IN (60, 90, 120))
 );
 
 CREATE TABLE IF NOT EXISTS setup_tokens (
