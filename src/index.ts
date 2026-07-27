@@ -192,7 +192,9 @@ async function fetchAssignments(session: VolpSession): Promise<Assignment[]> {
   const courseData = await postVolp(
     "https://learner.volp.in/learnerCourseDashboard/learnerCourseList", {}, session, "/learner/my-courses"
   );
-  const courses = (courseData.col_list ?? []).filter((course: any) => course.course_status && !course.is_archived);
+  // VOLP reports some newly registered/current courses with a falsy
+  // course_status even though they are available to the learner.
+  const courses = (courseData.col_list ?? []).filter((course: any) => !course.is_archived);
   const found: Assignment[] = [];
   for (const course of courses) {
     const courseName = stripHtml(course.course?.course_name) || "Course";
