@@ -198,10 +198,38 @@ async function fetchAssignments(session: VolpSession): Promise<Assignment[]> {
   const found: Assignment[] = [];
   for (const course of courses) {
     const courseName = stripHtml(course.course?.course_name) || "Course";
+    await postVolp(
+      "https://learner.volp.in/learnerCourseDashboard/startCourse",
+      { colid: course.colid }, session, "/learner-course-overview"
+    );
     const content = await postVolp(
       "https://learner.volp.in/learnerCourseContent/courseContentData",
       { colid: course.colid }, session, "/learner-course-content"
     );
+    const courseId = content.course_id || course.crsid;
+    if ((content.course_level?.assigns?.hands ?? []).length && courseId) {
+      const data = await postVolp(
+        "https://learner.volp.in/HandOnAssignment/getHandsOnDetails",
+        {
+          course_offering_learner_id: course.colid,
+          courseId,
+          type: "content"
+        },
+        session, "/learner-handson-assignment"
+      );
+      for (const item of data.ass_list ?? []) {
+        const dueAt = parseDueDate(item.duedate);
+        if (!dueAt) continue;
+        found.push({
+          key: `hands:${course.colid}:${item.ass_id ?? item.id ?? courseId}:${dueAt.toISOString()}`,
+          title: stripHtml(item.assignment_text) || "Hands-on assignment",
+          course: courseName,
+          type: "Hands-on",
+          dueAt,
+          submitted: Boolean(item.filePath || item.isevaluated)
+        });
+      }
+    }
     for (const unit of content.unit_level ?? []) {
       if (!(unit.assigns?.hands ?? []).length) continue;
       const data = await postVolp(
@@ -222,7 +250,6 @@ async function fetchAssignments(session: VolpSession): Promise<Assignment[]> {
         });
       }
     }
-    const courseId = content.course_id || course.crsid;
     if (!courseId) continue;
     const subjective = await postVolp(
       "https://learner.volp.in/SubjectiveAssignment/getSubjectiveAssignment_new",
