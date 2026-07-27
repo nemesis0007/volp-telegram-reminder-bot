@@ -28,6 +28,10 @@ const DEFAULT_REMINDER_MINUTES: ReminderMinutes = 90;
 const REMINDER_OPTIONS: ReminderMinutes[] = [60, 90, 120];
 const REPOSITORY_URL = "https://github.com/nemesis0007/volp-telegram-reminder-bot";
 
+function delay(milliseconds: number) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
 function json(data: unknown, status = 200) {
   return Response.json(data, { status });
 }
@@ -87,13 +91,29 @@ function volpHeaders(session?: VolpSession, route = "/") {
 }
 
 async function postVolp(url: string, body: unknown, session?: VolpSession, route?: string) {
-  const response = await fetch(url, {
-    method: "POST",
-    headers: volpHeaders(session, route),
-    body: JSON.stringify(body)
-  });
-  if (!response.ok) throw new Error(`VOLP request failed (${response.status})`);
-  return response.json<any>();
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: volpHeaders(session, route),
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(15_000)
+      });
+      if (response.ok) return response.json<any>();
+      if (attempt === 0 && [429, 502, 503, 504].includes(response.status)) {
+        await delay(500);
+        continue;
+      }
+      throw new Error(`VOLP request failed (${response.status})`);
+    } catch (error) {
+      if (attempt === 0 && error instanceof Error && error.name === "TimeoutError") {
+        await delay(500);
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error("VOLP request failed");
 }
 
 function bytesToBase64(bytes: Uint8Array) {
@@ -125,13 +145,23 @@ async function decryptSecret(value: string, secret: string) {
 }
 
 async function telegram(env: Env, method: string, body: Record<string, unknown>) {
-  const response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body)
-  });
-  if (!response.ok) throw new Error(`Telegram ${method} failed (${response.status})`);
-  return response.json();
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10_000)
+    });
+    const data: any = await response.json().catch(() => ({}));
+    if (response.ok && data.ok !== false) return data;
+    const retryAfter = Number(data.parameters?.retry_after ?? 0);
+    if (attempt === 0 && response.status === 429 && retryAfter > 0 && retryAfter <= 5) {
+      await delay(retryAfter * 1000);
+      continue;
+    }
+    throw new Error(`Telegram ${method} failed (${response.status}): ${String(data.description ?? "unknown error").slice(0, 120)}`);
+  }
+  throw new Error(`Telegram ${method} failed`);
 }
 
 async function configureTelegram(env: Env, origin: string) {
@@ -155,7 +185,8 @@ async function configureTelegram(env: Env, origin: string) {
     telegram(env, "setWebhook", {
       url: `${origin}/webhook/${env.WEBHOOK_SECRET}`,
       secret_token: env.WEBHOOK_SECRET,
-      allowed_updates: ["message", "callback_query"]
+      allowed_updates: ["message", "callback_query"],
+      max_connections: 20
     })
   ]);
 }
@@ -239,6 +270,9 @@ async function handleCommand(env: Env, chatId: number, text: string, origin: str
     return send(env, chatId, `📚 <b>Upcoming assignments</b>\n\n${lines.join("\n\n")}`);
   }
   if (command === "/sync") {
+    if (!(await acquireSyncLock(env, chatId))) {
+      return send(env, chatId, "⏳ I’m already checking VOLP for you. Please wait for the result.");
+    }
     await send(env, chatId, "Checking VOLP…");
     try {
       await syncUser(env, chatId);
@@ -255,6 +289,8 @@ async function handleCommand(env: Env, chatId: number, text: string, origin: str
         );
       }
       return send(env, chatId, "⚠️ VOLP is unavailable or the sync failed. Please try /sync again later.");
+    } finally {
+      await releaseSyncLock(env, chatId);
     }
   }
   if (command === "/settings" || command === "/reminder") {
@@ -286,7 +322,7 @@ function collectHandsOn(
 ) {
   for (const item of items) {
     const dueAt = parseDueDate(item.duedate);
-    if (!dueAt) continue;
+    if (!dueAt || dueAt.getTime() <= Date.now()) continue;
     found.push({
       key: `hands:${course.colid}:${item.ass_id ?? item.id ?? fallbackId}:${dueAt.toISOString()}`,
       title: stripHtml(item.assignment_text) || "Hands-on assignment",
@@ -346,7 +382,7 @@ async function fetchAssignments(session: VolpSession): Promise<Assignment[]> {
       );
       collectHandsOn(found, data.ass_list ?? [], { colid: course.colid, name: courseName }, unit.unit_id);
     }
-    if (!courseId) continue;
+    if (!courseId || (content.course_level?.assigns?.proj?.length ?? 0) === 0) continue;
     const subjective = await postVolp(
       "https://learner.volp.in/SubjectiveAssignment/getSubjectiveAssignment_new",
       { course_offering_learner_id: course.colid, courseId, type: "content" },
@@ -354,7 +390,7 @@ async function fetchAssignments(session: VolpSession): Promise<Assignment[]> {
     );
     for (const item of subjective.question_list ?? []) {
       const dueAt = parseDueDate(item.due_date);
-      if (!dueAt) continue;
+      if (!dueAt || dueAt.getTime() <= Date.now()) continue;
       found.push({
         key: `subjective:${course.colid}:${item.question_id ?? item.id ?? stripHtml(item.question).slice(0, 40)}:${dueAt.toISOString()}`,
         title: stripHtml(item.question) || "Subjective assignment",
@@ -366,6 +402,21 @@ async function fetchAssignments(session: VolpSession): Promise<Assignment[]> {
     }
   }
   return found;
+}
+
+async function acquireSyncLock(env: Env, chatId: number) {
+  const now = new Date();
+  const expires = new Date(now.getTime() + 10 * 60_000).toISOString();
+  const result = await env.DB.prepare(
+    `INSERT INTO sync_locks(chat_id,expires_at) VALUES(?,?)
+     ON CONFLICT(chat_id) DO UPDATE SET expires_at=excluded.expires_at
+     WHERE sync_locks.expires_at < ?`
+  ).bind(chatId, expires, now.toISOString()).run();
+  return result.meta.changes === 1;
+}
+
+async function releaseSyncLock(env: Env, chatId: number) {
+  await env.DB.prepare("DELETE FROM sync_locks WHERE chat_id=?").bind(chatId).run();
 }
 
 async function syncUser(env: Env, chatId: number) {
@@ -417,14 +468,32 @@ async function runScheduled(env: Env) {
      FROM volp_accounts a LEFT JOIN users u ON u.chat_id=a.chat_id`
   ).bind(DEFAULT_REMINDER_MINUTES).all<{ chat_id: number; reminder_minutes: number }>();
   for (const account of accounts.results) {
+    if (!(await acquireSyncLock(env, account.chat_id))) continue;
     try {
       await syncUser(env, account.chat_id);
       await sendDueReminders(env, account.chat_id, account.reminder_minutes);
     } catch {
       // Error is stored per account; one unavailable account must not stop others.
+    } finally {
+      await releaseSyncLock(env, account.chat_id);
     }
   }
-  await env.DB.prepare("DELETE FROM setup_tokens WHERE expires_at < ?").bind(new Date().toISOString()).run();
+  const now = new Date().toISOString();
+  const updateCutoff = new Date(Date.now() - 7 * 24 * 60 * 60_000).toISOString();
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM setup_tokens WHERE expires_at < ?").bind(now),
+    env.DB.prepare("DELETE FROM sync_locks WHERE expires_at < ?").bind(now),
+    env.DB.prepare("DELETE FROM telegram_updates WHERE received_at < ?").bind(updateCutoff),
+    env.DB.prepare("DELETE FROM assignments WHERE due_at < ?").bind(now),
+    env.DB.prepare(
+      `DELETE FROM sent_notifications
+       WHERE NOT EXISTS (
+         SELECT 1 FROM assignments a
+         WHERE a.chat_id=sent_notifications.chat_id
+           AND a.assignment_key=sent_notifications.assignment_key
+       )`
+    )
+  ]);
 }
 
 async function connectGet(env: Env, token: string) {
@@ -521,8 +590,34 @@ async function connectSession(request: Request, env: Env) {
   }
 }
 
+async function processTelegramUpdate(env: Env, update: any, origin: string) {
+  let status = "done";
+  try {
+    if (update.message?.text) {
+      await handleCommand(env, update.message.chat.id, update.message.text, origin);
+    } else if (update.callback_query) {
+      await handleCallback(env, update.callback_query);
+    }
+  } catch (error) {
+    status = "failed";
+    console.error("Telegram update failed", error instanceof Error ? error.message : "unknown error");
+    const chatId = update.message?.chat?.id ?? update.callback_query?.message?.chat?.id;
+    if (chatId) {
+      try {
+        await send(env, chatId, "⚠️ Something went wrong while processing that request. Please try again.");
+      } catch {
+        // The user may have blocked the bot; the webhook still remains healthy.
+      }
+    }
+  } finally {
+    await env.DB.prepare(
+      "UPDATE telegram_updates SET status=?,processed_at=? WHERE update_id=?"
+    ).bind(status, new Date().toISOString(), update.update_id).run();
+  }
+}
+
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === "GET" && url.pathname === "/health") return json({ ok: true });
     if (request.method === "GET" && url.pathname === "/bot") {
@@ -535,8 +630,13 @@ export default {
     if (request.method !== "POST" || url.pathname !== `/webhook/${env.WEBHOOK_SECRET}`) return new Response("Not found", { status: 404 });
     if (request.headers.get("X-Telegram-Bot-Api-Secret-Token") !== env.WEBHOOK_SECRET) return new Response("Forbidden", { status: 403 });
     const update: any = await request.json();
-    if (update.message?.text) await handleCommand(env, update.message.chat.id, update.message.text, url.origin);
-    if (update.callback_query) await handleCallback(env, update.callback_query);
+    if (!Number.isInteger(update.update_id)) return new Response("Bad Request", { status: 400 });
+    const claimed = await env.DB.prepare(
+      "INSERT OR IGNORE INTO telegram_updates(update_id,status,received_at) VALUES(?,'processing',?)"
+    ).bind(update.update_id, new Date().toISOString()).run();
+    if (claimed.meta.changes === 1) {
+      ctx.waitUntil(processTelegramUpdate(env, update, url.origin));
+    }
     return new Response("ok");
   },
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {

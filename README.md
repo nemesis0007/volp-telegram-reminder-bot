@@ -24,6 +24,16 @@ Users never type VOLP passwords into Telegram. The setup page sends the password
 
 When VOLP expires a session, the user must reconnect. See [SECURITY.md](SECURITY.md).
 
+## Reliability
+
+- Webhooks are acknowledged immediately and processed with Cloudflare background tasks.
+- Telegram update IDs are deduplicated to prevent repeated commands after delivery retries.
+- Per-user locks prevent manual and hourly syncs from overlapping.
+- Telegram rate limits and temporary VOLP failures use bounded retries and request timeouts.
+- Only future assignments are stored, and indexed cleanup keeps D1 usage small.
+
+The implementation follows the official [Telegram webhook documentation](https://core.telegram.org/bots/api#setwebhook), [Telegram bot FAQ](https://core.telegram.org/bots/faq), and [Cloudflare Workers best practices](https://developers.cloudflare.com/workers/best-practices/workers-best-practices/).
+
 ## Free deployment
 
 Requirements:
