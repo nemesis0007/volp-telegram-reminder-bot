@@ -265,6 +265,20 @@ async function handleCallback(env: Env, callback: any) {
   return showSettings(env, chatId);
 }
 
+async function sendAssignments(env: Env, chatId: number) {
+  const rows = await env.DB.prepare(
+    "SELECT title,course,assignment_type,due_at FROM assignments WHERE chat_id=? AND submitted=0 AND due_at>? ORDER BY due_at LIMIT 15"
+  ).bind(chatId, new Date().toISOString()).all<any>();
+  if (!rows.results.length) {
+    return send(env, chatId, "No upcoming assignments found. Use /sync to check VOLP now.");
+  }
+  const lines = rows.results.map(
+    (assignment) =>
+      `• <b>${escapeHtml(assignment.title)}</b>\n  ${escapeHtml(assignment.course)} · ${new Date(assignment.due_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}`
+  );
+  return send(env, chatId, `📚 <b>Upcoming assignments</b>\n\n${lines.join("\n\n")}`);
+}
+
 async function handleCommand(env: Env, chatId: number, text: string, origin: string) {
   const command = text.trim().split(/\s+/)[0].split("@")[0].toLowerCase();
   if (command === "/start" || command === "/connect") {
@@ -278,12 +292,13 @@ async function handleCommand(env: Env, chatId: number, text: string, origin: str
       { inline_keyboard: [[{ text: "Connect VOLP 🔐", url: link }], [{ text: "Choose reminder time", callback_data: "reminder:90" }]] });
   }
   if (command === "/assignments") {
-    const rows = await env.DB.prepare(
-      "SELECT title,course,assignment_type,due_at FROM assignments WHERE chat_id=? AND submitted=0 AND due_at>? ORDER BY due_at LIMIT 15"
-    ).bind(chatId, new Date().toISOString()).all<any>();
-    if (!rows.results.length) return send(env, chatId, "No upcoming assignments found. Use /sync to check VOLP now.");
-    const lines = rows.results.map((a) => `• <b>${escapeHtml(a.title)}</b>\n  ${escapeHtml(a.course)} · ${new Date(a.due_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}`);
-    return send(env, chatId, `📚 <b>Upcoming assignments</b>\n\n${lines.join("\n\n")}`);
+    const account = await env.DB.prepare(
+      "SELECT last_sync_at FROM volp_accounts WHERE chat_id=?"
+    ).bind(chatId).first<{ last_sync_at: string | null }>();
+    if (account && !account.last_sync_at) {
+      return send(env, chatId, "⏳ Your first VOLP sync is still loading assignments. I’ll send them automatically when it finishes.");
+    }
+    return sendAssignments(env, chatId);
   }
   if (command === "/sync") {
     if (!(await acquireSyncLock(env, chatId))) {
@@ -292,7 +307,7 @@ async function handleCommand(env: Env, chatId: number, text: string, origin: str
     await send(env, chatId, "Checking VOLP…");
     try {
       await syncUser(env, chatId);
-      return handleCommand(env, chatId, "/assignments", origin);
+      return sendAssignments(env, chatId);
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
       if (message.includes("session expired") || message.includes("not connected")) {
@@ -586,7 +601,19 @@ async function connectGet(env: Env, token: string) {
     </script>`));
 }
 
-async function connectSession(request: Request, env: Env) {
+async function runInitialSync(env: Env, chatId: number) {
+  if (!(await acquireSyncLock(env, chatId))) return;
+  try {
+    await syncUser(env, chatId);
+    await sendAssignments(env, chatId);
+  } catch {
+    await send(env, chatId, "⚠️ Your VOLP account connected, but the first assignment sync failed. Please try /sync.");
+  } finally {
+    await releaseSyncLock(env, chatId);
+  }
+}
+
+async function connectSession(request: Request, env: Env, ctx: ExecutionContext) {
   const body = await request.json<any>();
   const token = String(body.setupToken ?? "");
   const username = String(body.username ?? "").trim();
@@ -607,15 +634,16 @@ async function connectSession(request: Request, env: Env) {
       `INSERT INTO volp_accounts(chat_id,username,uid,encrypted_token,connected_at)
        VALUES(?,?,?,?,?) ON CONFLICT(chat_id) DO UPDATE SET
        username=excluded.username,uid=excluded.uid,encrypted_token=excluded.encrypted_token,
-       connected_at=excluded.connected_at,last_error=NULL`
+       connected_at=excluded.connected_at,last_sync_at=NULL,last_error=NULL`
     ).bind(setup.chat_id, username, uid, encrypted, new Date().toISOString()).run();
     await env.DB.prepare("DELETE FROM setup_tokens WHERE token=?").bind(token).run();
     await send(
       env,
       setup.chat_id,
-      "✅ VOLP connected without storing your password. I’ll check every hour.\n\nUse /assignments, /sync, or /settings anytime.",
+      "✅ VOLP connected without storing your password. I’m loading your assignments now and will send them automatically.\n\nAfter that, I’ll check every hour. Use /assignments, /sync, or /settings anytime.",
       reminderKeyboard(DEFAULT_REMINDER_MINUTES)
     );
+    ctx.waitUntil(runInitialSync(env, setup.chat_id));
     return json({ ok: true });
   } catch {
     return json({ error: "VOLP session validation failed" }, 401);
@@ -658,7 +686,7 @@ export default {
       return Response.redirect(`https://t.me/${info.result.username}`, 302);
     }
     if (url.pathname === "/connect" && request.method === "GET") return connectGet(env, url.searchParams.get("token") ?? "");
-    if (url.pathname === "/connect-session" && request.method === "POST") return connectSession(request, env);
+    if (url.pathname === "/connect-session" && request.method === "POST") return connectSession(request, env, ctx);
     if (request.method !== "POST" || url.pathname !== `/webhook/${env.WEBHOOK_SECRET}`) return new Response("Not found", { status: 404 });
     if (request.headers.get("X-Telegram-Bot-Api-Secret-Token") !== env.WEBHOOK_SECRET) return new Response("Forbidden", { status: 403 });
     const update: any = await request.json();
