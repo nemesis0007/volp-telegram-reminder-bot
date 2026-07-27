@@ -240,8 +240,22 @@ async function handleCommand(env: Env, chatId: number, text: string, origin: str
   }
   if (command === "/sync") {
     await send(env, chatId, "Checking VOLP…");
-    await syncUser(env, chatId);
-    return handleCommand(env, chatId, "/assignments", origin);
+    try {
+      await syncUser(env, chatId);
+      return handleCommand(env, chatId, "/assignments", origin);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      if (message.includes("session expired") || message.includes("not connected")) {
+        const link = await makeSetupLink(env, chatId, origin);
+        return send(
+          env,
+          chatId,
+          "⚠️ Your VOLP session is no longer valid. Reconnect using the private link below.",
+          { inline_keyboard: [[{ text: "Reconnect VOLP 🔐", url: link }]] }
+        );
+      }
+      return send(env, chatId, "⚠️ VOLP is unavailable or the sync failed. Please try /sync again later.");
+    }
   }
   if (command === "/settings" || command === "/reminder") {
     return showSettings(env, chatId);
@@ -480,7 +494,13 @@ async function connectSession(request: Request, env: Env) {
   const setup = await env.DB.prepare("SELECT chat_id FROM setup_tokens WHERE token=? AND expires_at>?").bind(token, new Date().toISOString()).first<{ chat_id: number }>();
   if (!setup || !username || !uid || !volpToken) return json({ error: "Invalid or expired setup" }, 400);
   try {
-    await postVolp("https://learner.volp.in/learnerCourseDashboard/learnerCourseList", {}, { token: volpToken, uid }, "/learner/my-courses");
+    const validation = await postVolp(
+      "https://learner.volp.in/learnerCourseDashboard/learnerCourseList",
+      {},
+      { token: volpToken, uid },
+      "/learner/my-courses"
+    );
+    if (!Array.isArray(validation.col_list)) throw new Error("Invalid VOLP session");
     const encrypted = await encryptSecret(volpToken, env.CREDENTIAL_KEY);
     await env.DB.prepare(
       `INSERT INTO volp_accounts(chat_id,username,uid,encrypted_token,connected_at)
