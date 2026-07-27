@@ -63,8 +63,24 @@ function escapeHtml(value: string) {
   return value.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 }
 
+function decodeHtmlEntities(value: string) {
+  const named: Record<string, string> = {
+    amp: "&", apos: "'", gt: ">", lt: "<", nbsp: " ", quot: '"',
+    rsquo: "’", lsquo: "‘", rdquo: "”", ldquo: "“"
+  };
+  return value.replace(/&(#x[\da-f]+|#\d+|[a-z]+);/gi, (entity, code: string) => {
+    if (code[0] === "#") {
+      const number = code[1]?.toLowerCase() === "x"
+        ? Number.parseInt(code.slice(2), 16)
+        : Number.parseInt(code.slice(1), 10);
+      return Number.isFinite(number) ? String.fromCodePoint(number) : entity;
+    }
+    return named[code.toLowerCase()] ?? entity;
+  });
+}
+
 function stripHtml(value: unknown) {
-  return String(value ?? "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+  return decodeHtmlEntities(String(value ?? "").replace(/<[^>]*>/g, " ")).replace(/\s+/g, " ").trim();
 }
 
 function parseDueDate(value: unknown): Date | null {
@@ -317,16 +333,17 @@ async function handleCommand(env: Env, chatId: number, text: string, origin: str
 function collectHandsOn(
   found: Assignment[],
   items: any[],
-  course: { colid: string | number; name: string },
+  courseName: string,
   fallbackId: string | number
 ) {
   for (const item of items) {
     const dueAt = parseDueDate(item.duedate);
     if (!dueAt || dueAt.getTime() <= Date.now()) continue;
+    const title = stripHtml(item.assignment_text) || "Hands-on assignment";
     found.push({
-      key: `hands:${course.colid}:${item.ass_id ?? item.id ?? fallbackId}:${dueAt.toISOString()}`,
-      title: stripHtml(item.assignment_text) || "Hands-on assignment",
-      course: course.name,
+      key: `hands:${item.ass_id ?? item.id ?? `${fallbackId}:${title.slice(0, 80)}`}`,
+      title,
+      course: courseName,
       type: "Hands-on",
       dueAt,
       submitted: Boolean(item.filePath || item.isevaluated)
@@ -371,7 +388,7 @@ async function fetchAssignments(session: VolpSession): Promise<Assignment[]> {
         },
         session, "/learner-handson-assignment"
       );
-      collectHandsOn(found, data.ass_list ?? [], { colid: course.colid, name: courseName }, courseId);
+      collectHandsOn(found, data.ass_list ?? [], courseName, courseId);
     }
     for (const unit of content.unit_level ?? []) {
       if (!(unit.assigns?.hands ?? []).length) continue;
@@ -380,7 +397,7 @@ async function fetchAssignments(session: VolpSession): Promise<Assignment[]> {
         { course_offering_learner_id: course.colid, outline: unit.unit_id, type: "content" },
         session, "/learner-handson-assignment"
       );
-      collectHandsOn(found, data.ass_list ?? [], { colid: course.colid, name: courseName }, unit.unit_id);
+      collectHandsOn(found, data.ass_list ?? [], courseName, unit.unit_id);
     }
     if (!courseId || (content.course_level?.assigns?.proj?.length ?? 0) === 0) continue;
     const subjective = await postVolp(
@@ -392,7 +409,7 @@ async function fetchAssignments(session: VolpSession): Promise<Assignment[]> {
       const dueAt = parseDueDate(item.due_date);
       if (!dueAt || dueAt.getTime() <= Date.now()) continue;
       found.push({
-        key: `subjective:${course.colid}:${item.question_id ?? item.id ?? stripHtml(item.question).slice(0, 40)}:${dueAt.toISOString()}`,
+        key: `subjective:${item.question_id ?? item.id ?? `${courseId}:${stripHtml(item.question).slice(0, 80)}`}`,
         title: stripHtml(item.question) || "Subjective assignment",
         course: courseName,
         type: "Subjective",
@@ -437,6 +454,21 @@ async function syncUser(env: Env, chatId: number) {
       ).bind(chatId, item.key, item.title, item.course, item.type, item.dueAt.toISOString(), item.submitted ? 1 : 0, now)
     );
     if (writes.length) await env.DB.batch(writes);
+    await env.DB.prepare(
+      `DELETE FROM assignments
+       WHERE rowid IN (
+         SELECT rowid FROM (
+           SELECT rowid,
+             ROW_NUMBER() OVER (
+               PARTITION BY chat_id,title,course,assignment_type,due_at
+               ORDER BY updated_at DESC,rowid DESC
+             ) AS duplicate_number
+           FROM assignments
+           WHERE chat_id=?
+         )
+         WHERE duplicate_number > 1
+       )`
+    ).bind(chatId).run();
     await env.DB.prepare("UPDATE volp_accounts SET last_sync_at=?,last_error=NULL WHERE chat_id=?").bind(now, chatId).run();
   } catch (error) {
     const message = error instanceof Error ? error.message.slice(0, 200) : "Sync failed";
