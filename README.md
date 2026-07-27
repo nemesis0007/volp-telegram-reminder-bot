@@ -12,6 +12,7 @@ A free, shared Telegram bot that checks VOLP for pending assignments and sends d
 - Upcoming assignment list with `/assignments`
 - Manual refresh with `/sync`
 - Hourly assignment checks
+- Reminder delivery evaluated every 15 minutes
 - A personal reminder choice: 1 hour, 1.5 hours, or 2 hours before deadlines
 - Settings buttons with `/settings`
 - An in-bot privacy and project summary with `/about`
@@ -31,6 +32,11 @@ When VOLP expires a session, the user must reconnect. See [SECURITY.md](SECURITY
 - Per-user locks prevent manual and hourly syncs from overlapping.
 - Telegram rate limits and temporary VOLP failures use bounded retries and request timeouts.
 - Only future assignments are stored, and indexed cleanup keeps D1 usage small.
+- Connecting a different VOLP account atomically replaces the previous account and clears its cached data.
+- Assignments removed from VOLP are removed locally after the next successful sync.
+- Deadline changes reset the reminder state, so the updated deadline can notify correctly.
+- VOLP credentials and assignment data are accepted only in private Telegram chats.
+- Disconnect requires confirmation and deletes the session, assignments, reminders, locks, and preferences.
 
 The implementation follows the official [Telegram webhook documentation](https://core.telegram.org/bots/api#setwebhook), [Telegram bot FAQ](https://core.telegram.org/bots/faq), and [Cloudflare Workers best practices](https://developers.cloudflare.com/workers/best-practices/workers-best-practices/).
 
