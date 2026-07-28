@@ -307,14 +307,14 @@ async function handleCallback(env: Env, callback: any) {
 
 async function sendAssignments(env: Env, chatId: number) {
   const rows = await env.DB.prepare(
-    "SELECT title,course,assignment_type,due_at FROM assignments WHERE chat_id=? AND submitted=0 AND due_at>? ORDER BY due_at LIMIT 15"
+    "SELECT title,course,assignment_type,due_at,submitted FROM assignments WHERE chat_id=? AND due_at>? ORDER BY due_at LIMIT 15"
   ).bind(chatId, new Date().toISOString()).all<any>();
   if (!rows.results.length) {
     return send(env, chatId, "No upcoming assignments found. Use /sync to check VOLP now.");
   }
   const entries = rows.results.map(
     (assignment) =>
-      `• <b>${escapeHtml(truncate(assignment.title, 700))}</b>\n  ${escapeHtml(truncate(assignment.course, 160))} · ${new Date(assignment.due_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}`
+      `• <b>${escapeHtml(truncate(assignment.title, 700))}</b>\n  ${escapeHtml(truncate(assignment.course, 160))} · ${new Date(assignment.due_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}\n  ${assignment.submitted ? "✅ Submitted" : "🟠 Not submitted"}`
   );
   const messages: string[] = [];
   let message = "📚 <b>Upcoming assignments</b>";
@@ -644,7 +644,7 @@ async function syncUser(env: Env, chatId: number) {
 
 async function sendDueReminders(env: Env, chatId: number, threshold: number) {
   const rows = await env.DB.prepare(
-    "SELECT assignment_key,title,course,assignment_type,due_at FROM assignments WHERE chat_id=? AND submitted=0 AND due_at>?"
+    "SELECT assignment_key,title,course,assignment_type,due_at,submitted FROM assignments WHERE chat_id=? AND due_at>?"
   ).bind(chatId, new Date().toISOString()).all<any>();
   for (const item of rows.results) {
     const remaining = Math.floor((new Date(item.due_at).getTime() - Date.now()) / 60_000);
@@ -655,7 +655,7 @@ async function sendDueReminders(env: Env, chatId: number, threshold: number) {
     if (marked.meta.changes !== 1) continue;
     const label = threshold === 90 ? "1.5 hours" : `${threshold / 60} hour${threshold === 60 ? "" : "s"}`;
     await send(env, chatId,
-      `⏰ <b>Assignment due in ${label}</b>\n\n<b>${escapeHtml(truncate(item.title, 1_000))}</b>\n${escapeHtml(truncate(item.course, 160))} · ${escapeHtml(item.assignment_type)}\nDue: ${new Date(item.due_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}`);
+      `⏰ <b>Assignment due in ${label}</b>\n\n<b>${escapeHtml(truncate(item.title, 1_000))}</b>\n${escapeHtml(truncate(item.course, 160))} · ${escapeHtml(item.assignment_type)}\nDue: ${new Date(item.due_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}\nStatus: ${item.submitted ? "✅ Submitted" : "🟠 Not submitted"}`);
   }
 }
 
