@@ -751,6 +751,9 @@ async function connectSession(request: Request, env: Env, ctx: ExecutionContext)
     const existing = await env.DB.prepare(
       "SELECT uid FROM volp_accounts WHERE chat_id=?"
     ).bind(claimedSetup.chat_id).first<{ uid: string }>();
+    const duplicateAccounts = await env.DB.prepare(
+      "SELECT chat_id FROM volp_accounts WHERE lower(uid)=lower(?) AND chat_id<>?"
+    ).bind(uid, claimedSetup.chat_id).all<{ chat_id: number }>();
     const accountChanged = Boolean(existing && existing.uid.toLowerCase() !== uid.toLowerCase());
     const encrypted = await encryptSecret(candidateSession.token, env.CREDENTIAL_KEY);
     const writes = [];
@@ -760,6 +763,15 @@ async function connectSession(request: Request, env: Env, ctx: ExecutionContext)
         env.DB.prepare("DELETE FROM assignments WHERE chat_id=?").bind(claimedSetup.chat_id)
       );
     }
+    for (const duplicateAccount of duplicateAccounts.results) {
+      writes.push(
+        env.DB.prepare("DELETE FROM sent_notifications WHERE chat_id=?").bind(duplicateAccount.chat_id),
+        env.DB.prepare("DELETE FROM assignments WHERE chat_id=?").bind(duplicateAccount.chat_id),
+        env.DB.prepare("DELETE FROM volp_accounts WHERE chat_id=?").bind(duplicateAccount.chat_id),
+        env.DB.prepare("DELETE FROM setup_tokens WHERE chat_id=?").bind(duplicateAccount.chat_id),
+        env.DB.prepare("DELETE FROM sync_locks WHERE chat_id=?").bind(duplicateAccount.chat_id)
+      );
+    }
     writes.push(env.DB.prepare(
       `INSERT INTO volp_accounts(chat_id,username,uid,encrypted_token,connected_at)
        VALUES(?,?,?,?,?) ON CONFLICT(chat_id) DO UPDATE SET
@@ -767,6 +779,17 @@ async function connectSession(request: Request, env: Env, ctx: ExecutionContext)
        connected_at=excluded.connected_at,last_sync_at=NULL,last_error=NULL`
     ).bind(claimedSetup.chat_id, username, uid, encrypted, new Date().toISOString()));
     await env.DB.batch(writes);
+    for (const duplicateAccount of duplicateAccounts.results) {
+      try {
+        await send(
+          env,
+          duplicateAccount.chat_id,
+          "⚠️ This VOLP account was connected to another Telegram chat, so it was disconnected here. VOLP allows only one active session for this account."
+        );
+      } catch {
+        // The previous Telegram chat may no longer be reachable.
+      }
+    }
     await send(
       env,
       claimedSetup.chat_id,
