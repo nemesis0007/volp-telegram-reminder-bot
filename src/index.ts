@@ -285,6 +285,10 @@ async function handleCallback(env: Env, callback: any) {
     ]);
     return send(env, chatId, "✅ Disconnected. Your stored VOLP session, assignments, reminders, and preferences were deleted.");
   }
+  if (data === "assignments:view") {
+    await telegram(env, "answerCallbackQuery", { callback_query_id: callback.id });
+    return sendAssignments(env, chatId);
+  }
   const match = data.match(/^reminder:(60|90|120)$/);
   if (!match) {
     return telegram(env, "answerCallbackQuery", { callback_query_id: callback.id });
@@ -797,7 +801,12 @@ async function runInitialSync(env: Env, chatId: number) {
   }
   try {
     await syncUser(env, chatId);
-    await sendAssignments(env, chatId);
+    await send(
+      env,
+      chatId,
+      "✅ Your assignments are loaded.",
+      { inline_keyboard: [[{ text: "View assignments 📚", callback_data: "assignments:view" }]] }
+    );
   } catch {
     await send(env, chatId, "⚠️ Your VOLP account connected, but the first assignment sync failed. Please try /sync.");
   } finally {
