@@ -119,7 +119,16 @@ async function postVolp(url: string, body: unknown, session?: VolpSession, route
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(15_000)
       });
-      if (response.ok) return response.json<any>();
+      if (response.ok) {
+        const data = await response.json<any>();
+        const status = String(data?.status ?? "");
+        if (session && status === "100" && data.token) session.token = String(data.token);
+        if (status === "401") throw new Error("VOLP session expired. Use /connect to reconnect.");
+        if (status === "402") throw new Error("VOLP organization is not configured");
+        if (status === "405") throw new Error("VOLP access denied");
+        if (status === "406") throw new Error("VOLP tenant was not found");
+        return data;
+      }
       if (attempt === 0 && [429, 502, 503, 504].includes(response.status)) {
         await delay(500);
         continue;
@@ -541,7 +550,20 @@ async function syncUser(env: Env, chatId: number) {
              AND a.assignment_key=sent_notifications.assignment_key
          )`
     ).bind(chatId).run();
-    await env.DB.prepare("UPDATE volp_accounts SET last_sync_at=?,last_error=NULL WHERE chat_id=?").bind(now, chatId).run();
+    const encryptedToken = session.token === token
+      ? account.encrypted_token
+      : await encryptSecret(session.token, env.CREDENTIAL_KEY);
+    const accountUpdate = await env.DB.prepare(
+      `UPDATE volp_accounts
+       SET encrypted_token=?,last_sync_at=?,last_error=NULL
+       WHERE chat_id=? AND encrypted_token=?`
+    ).bind(encryptedToken, now, chatId, account.encrypted_token).run();
+    if (accountUpdate.meta.changes !== 1) {
+      await env.DB.prepare(
+        "DELETE FROM assignments WHERE chat_id=? AND updated_at=?"
+      ).bind(chatId, now).run();
+      throw new Error("VOLP account changed during sync");
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message.slice(0, 200) : "Sync failed";
     await env.DB.prepare(
@@ -713,10 +735,11 @@ async function connectSession(request: Request, env: Env, ctx: ExecutionContext)
   const setup = await env.DB.prepare("SELECT chat_id FROM setup_tokens WHERE token=? AND expires_at>?").bind(token, new Date().toISOString()).first<{ chat_id: number }>();
   if (!setup || !username || !uid || !volpToken) return json({ error: "Invalid or expired setup" }, 400);
   try {
+    const candidateSession = { token: volpToken, uid };
     const validation = await postVolp(
       "https://learner.volp.in/learnerCourseDashboard/learnerCourseList",
       {},
-      { token: volpToken, uid },
+      candidateSession,
       "/learner/my-courses"
     );
     if (!Array.isArray(validation.col_list)) throw new Error("Invalid VOLP session");
@@ -729,7 +752,7 @@ async function connectSession(request: Request, env: Env, ctx: ExecutionContext)
       "SELECT uid FROM volp_accounts WHERE chat_id=?"
     ).bind(claimedSetup.chat_id).first<{ uid: string }>();
     const accountChanged = Boolean(existing && existing.uid.toLowerCase() !== uid.toLowerCase());
-    const encrypted = await encryptSecret(volpToken, env.CREDENTIAL_KEY);
+    const encrypted = await encryptSecret(candidateSession.token, env.CREDENTIAL_KEY);
     const writes = [];
     if (accountChanged) {
       writes.push(
