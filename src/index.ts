@@ -31,6 +31,7 @@ const DEFAULT_REMINDER_MINUTES: ReminderMinutes = 90;
 const REMINDER_OPTIONS: ReminderMinutes[] = [60, 90, 120];
 const SYNC_INTERVAL_MS = 3 * 60 * 60_000;
 const SYNC_DISPATCH_GRACE_MS = 5 * 60_000;
+const MAX_CONNECTED_ACCOUNTS = 90;
 const REPOSITORY_URL = "https://github.com/nemesis0007/volp-telegram-reminder-bot";
 
 function delay(milliseconds: number) {
@@ -246,6 +247,17 @@ async function makeSetupLink(env: Env, chatId: number, origin: string) {
   return `${origin}/connect?token=${token}`;
 }
 
+async function hasConnectionCapacity(env: Env, chatId: number) {
+  const existing = await env.DB.prepare(
+    "SELECT 1 AS connected FROM volp_accounts WHERE chat_id=?"
+  ).bind(chatId).first();
+  if (existing) return true;
+  const count = await env.DB.prepare(
+    "SELECT COUNT(*) AS count FROM volp_accounts"
+  ).first<{ count: number }>();
+  return (count?.count ?? 0) < MAX_CONNECTED_ACCOUNTS;
+}
+
 function reminderKeyboard(current?: number) {
   return {
     inline_keyboard: [
@@ -341,6 +353,13 @@ async function handleCommand(env: Env, chatId: number, text: string, origin: str
     await env.DB.prepare(
       "INSERT OR IGNORE INTO users(chat_id,created_at,reminder_minutes) VALUES(?,?,?)"
     ).bind(chatId, new Date().toISOString(), DEFAULT_REMINDER_MINUTES).run();
+    if (!(await hasConnectionCapacity(env, chatId))) {
+      return send(
+        env,
+        chatId,
+        "⛔ <b>Bot capacity reached</b>\n\nNew VOLP connections are temporarily closed to keep reminders reliable. Existing connected users can continue using the bot."
+      );
+    }
     const link = await makeSetupLink(env, chatId, origin);
     return send(env, chatId,
       `👋 <b>VOLP Assignment Reminder</b>\n\nConnect your VOLP account using the private link below. It expires in 15 minutes.\n\nPassword storage is optional. By default, your password goes directly to VOLP; you may opt into encrypted storage for automatic re-login.`,
@@ -897,6 +916,9 @@ async function connectSession(request: Request, env: Env, ctx: ExecutionContext)
   ) {
     return json({ error: "Invalid or expired setup" }, 400);
   }
+  if (!(await hasConnectionCapacity(env, setup.chat_id))) {
+    return json({ error: "Bot capacity reached; new connections are temporarily closed" }, 503);
+  }
   try {
     const candidateSession = { token: volpToken, uid };
     const validation = await postVolp(
@@ -975,7 +997,10 @@ async function connectSession(request: Request, env: Env, ctx: ExecutionContext)
     );
     ctx.waitUntil(runInitialSync(env, claimedSetup.chat_id));
     return json({ ok: true });
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("BOT_CAPACITY_REACHED")) {
+      return json({ error: "Bot capacity reached; new connections are temporarily closed" }, 503);
+    }
     return json({ error: "VOLP session validation failed" }, 401);
   }
 }

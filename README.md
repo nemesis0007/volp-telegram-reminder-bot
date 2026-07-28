@@ -124,6 +124,8 @@ Open the bot in Telegram and send `/start`. Every user receives their own 15-min
 - Automatic account syncs are processed as individual queue jobs with retries and
   limited concurrency, preventing one large cron invocation from exhausting its
   outbound-request limit.
+- New connections stop automatically at 90 connected accounts. Existing users
+  can still reconnect, keeping capacity below the tested 100-user target.
 
 ## Development
 
