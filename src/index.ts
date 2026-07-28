@@ -29,6 +29,8 @@ const BASE_HEADERS: Record<string, string> = {
 };
 const DEFAULT_REMINDER_MINUTES: ReminderMinutes = 90;
 const REMINDER_OPTIONS: ReminderMinutes[] = [60, 90, 120];
+const SYNC_INTERVAL_MS = 3 * 60 * 60_000;
+const SYNC_DISPATCH_GRACE_MS = 5 * 60_000;
 const REPOSITORY_URL = "https://github.com/nemesis0007/volp-telegram-reminder-bot";
 
 function delay(milliseconds: number) {
@@ -212,10 +214,10 @@ async function configureTelegram(env: Env, origin: string) {
       ]
     }),
     telegram(env, "setMyDescription", {
-      description: "Checks VOLP every hour for upcoming assignments and sends private deadline reminders at the time you choose."
+      description: "Checks VOLP every 3 hours for upcoming assignments and sends private deadline reminders at the time you choose."
     }),
     telegram(env, "setMyShortDescription", {
-      short_description: "Hourly VOLP assignment checks with personal deadline reminders."
+      short_description: "VOLP checks every 3 hours with personal deadline reminders."
     }),
     telegram(env, "setWebhook", {
       url: `${origin}/webhook/${env.WEBHOOK_SECRET}`,
@@ -413,7 +415,7 @@ async function handleCommand(env: Env, chatId: number, text: string, origin: str
     return send(
       env,
       chatId,
-      `ℹ️ <b>About VOLP Assignment Reminder</b>\n\nI check VOLP every hour, list upcoming hands-on and subjective assignments, and remind each user at their chosen time.\n\nVOLP session tokens are encrypted. Password storage is optional and opt-in; saved passwords are encrypted and used only for automatic re-login. Use /forgetpassword to erase a saved password.\n\nOpen-source and unaffiliated with VOLP or VIT.\n\n<a href="${REPOSITORY_URL}">View source code on GitHub</a>`
+      `ℹ️ <b>About VOLP Assignment Reminder</b>\n\nI check VOLP every 3 hours, list upcoming hands-on and subjective assignments, and remind each user at their chosen time.\n\nVOLP session tokens are encrypted. Password storage is optional and opt-in; saved passwords are encrypted and used only for automatic re-login. Use /forgetpassword to erase a saved password.\n\nOpen-source and unaffiliated with VOLP or VIT.\n\n<a href="${REPOSITORY_URL}">View source code on GitHub</a>`
     );
   }
   if (command === "/disconnect") {
@@ -696,7 +698,7 @@ async function processScheduledAccount(env: Env, account: ScheduledAccount) {
   if (!(await acquireSyncLock(env, account.chat_id))) return;
   try {
     const lastSync = account.last_sync_at ? new Date(account.last_sync_at).getTime() : 0;
-    const syncIsDue = Date.now() - lastSync >= 55 * 60_000;
+    const syncIsDue = Date.now() - lastSync >= SYNC_INTERVAL_MS - SYNC_DISPATCH_GRACE_MS;
     const requiresManualReconnect =
       account.last_error?.includes("session expired") && !account.auto_relogin;
     if (syncIsDue && !requiresManualReconnect) {
@@ -709,7 +711,7 @@ async function processScheduledAccount(env: Env, account: ScheduledAccount) {
       message.includes("session expired") || message.includes("automatic re-login failed");
     if (authenticationFailed && !account.last_error) {
       try {
-        await send(env, account.chat_id, "⚠️ Your VOLP session expired. Use /connect to reconnect and resume hourly checks.");
+        await send(env, account.chat_id, "⚠️ Your VOLP session expired. Use /connect to reconnect and resume automatic checks.");
       } catch {
         // A blocked or deleted Telegram chat must not stop other users.
       }
@@ -720,7 +722,7 @@ async function processScheduledAccount(env: Env, account: ScheduledAccount) {
 }
 
 async function runScheduled(env: Env) {
-  const dueBefore = new Date(Date.now() - 55 * 60_000).toISOString();
+  const dueBefore = new Date(Date.now() - (SYNC_INTERVAL_MS - SYNC_DISPATCH_GRACE_MS)).toISOString();
   const redispatchBefore = new Date(Date.now() - 30 * 60_000).toISOString();
   const accounts = await env.DB.prepare(
     `SELECT a.chat_id, a.last_sync_at, a.last_error, a.auto_relogin,
@@ -779,7 +781,7 @@ async function processSyncJob(env: Env, chatId: number) {
     ).bind(chatId).first<Pick<ScheduledAccount, "last_sync_at" | "last_error" | "auto_relogin">>();
     if (!account) return;
     const lastSync = account.last_sync_at ? new Date(account.last_sync_at).getTime() : 0;
-    if (Date.now() - lastSync < 55 * 60_000) return;
+    if (Date.now() - lastSync < SYNC_INTERVAL_MS - SYNC_DISPATCH_GRACE_MS) return;
     await syncUser(env, chatId);
   } finally {
     await releaseSyncLock(env, chatId);
@@ -968,7 +970,7 @@ async function connectSession(request: Request, env: Env, ctx: ExecutionContext)
     await send(
       env,
       claimedSetup.chat_id,
-      `${accountChanged ? "🔄 VOLP account switched." : "✅ VOLP connected."} ${rememberPassword ? "Automatic re-login is enabled with encrypted password storage." : "Your password was not stored."}\n\nI’m loading assignments now and will send them automatically. After that, I’ll check every hour.`,
+      `${accountChanged ? "🔄 VOLP account switched." : "✅ VOLP connected."} ${rememberPassword ? "Automatic re-login is enabled with encrypted password storage." : "Your password was not stored."}\n\nI’m loading assignments now and will send them automatically. After that, I’ll check every 3 hours.`,
       reminderKeyboard(DEFAULT_REMINDER_MINUTES)
     );
     ctx.waitUntil(runInitialSync(env, claimedSetup.chat_id));

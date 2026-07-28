@@ -11,7 +11,7 @@ A free, shared Telegram bot that checks VOLP for pending assignments and sends d
 - Private one-time connection link inside Telegram
 - Upcoming assignment list with `/assignments`
 - Manual refresh with `/sync`
-- Hourly assignment checks
+- Assignment checks every three hours
 - Reminder delivery evaluated every 15 minutes
 - A personal reminder choice: 1 hour, 1.5 hours, or 2 hours before deadlines
 - Settings buttons with `/settings`
@@ -31,7 +31,7 @@ Automatic re-login is optional. When selected, the Worker receives and stores th
 
 - Webhooks are acknowledged immediately and processed with Cloudflare background tasks.
 - Telegram update IDs are deduplicated to prevent repeated commands after delivery retries.
-- Per-user locks prevent manual and hourly syncs from overlapping.
+- Per-user locks prevent manual and automatic syncs from overlapping.
 - Telegram rate limits and temporary VOLP failures use bounded retries and request timeouts.
 - Only future assignments are stored, and indexed cleanup keeps D1 usage small.
 - Connecting a different VOLP account atomically replaces the previous account and clears its cached data.
@@ -120,8 +120,8 @@ Open the bot in Telegram and send `/start`. Every user receives their own 15-min
 - VOLP has no documented public API. This project uses the same endpoints as its web client; they may change without notice.
 - The project is unaffiliated with VOLP or Vishwakarma Institute of Technology.
 - Do not use it to submit assignments or bypass access controls.
-- Respect Cloudflare and VOLP rate limits. The default sync interval is one hour.
-- Hourly account syncs are processed as individual queue jobs with retries and
+- Respect Cloudflare and VOLP rate limits. The automatic sync interval is three hours.
+- Automatic account syncs are processed as individual queue jobs with retries and
   limited concurrency, preventing one large cron invocation from exhausting its
   outbound-request limit.
 
