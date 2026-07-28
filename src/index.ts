@@ -294,6 +294,7 @@ async function handleCallback(env: Env, callback: any) {
     await telegram(env, "answerCallbackQuery", { callback_query_id: callback.id, text: "Disconnecting…" });
     await env.DB.batch([
       env.DB.prepare("DELETE FROM sent_notifications WHERE chat_id=?").bind(chatId),
+      env.DB.prepare("DELETE FROM new_assignment_notifications WHERE chat_id=?").bind(chatId),
       env.DB.prepare("DELETE FROM assignments WHERE chat_id=?").bind(chatId),
       env.DB.prepare("DELETE FROM volp_accounts WHERE chat_id=?").bind(chatId),
       env.DB.prepare("DELETE FROM setup_tokens WHERE chat_id=?").bind(chatId),
@@ -346,6 +347,51 @@ async function sendAssignments(env: Env, chatId: number) {
   for (const part of messages) await send(env, chatId, part);
 }
 
+async function markCurrentAssignmentsSeen(env: Env, chatId: number) {
+  await env.DB.prepare(
+    `INSERT OR IGNORE INTO new_assignment_notifications(chat_id,assignment_key,notified_at)
+     SELECT chat_id,assignment_key,? FROM assignments WHERE chat_id=?`
+  ).bind(new Date().toISOString(), chatId).run();
+}
+
+async function sendNewAssignmentNotifications(env: Env, chatId: number) {
+  const rows = await env.DB.prepare(
+    `SELECT a.assignment_key,a.title,a.course,a.due_at,a.submitted
+     FROM assignments a
+     WHERE a.chat_id=? AND a.due_at>?
+       AND NOT EXISTS (
+         SELECT 1 FROM new_assignment_notifications n
+         WHERE n.chat_id=a.chat_id AND n.assignment_key=a.assignment_key
+       )
+     ORDER BY a.due_at`
+  ).bind(chatId, new Date().toISOString()).all<any>();
+  if (!rows.results.length) return;
+
+  const messages: string[] = [];
+  let message = "🆕 <b>New assignments added</b>";
+  for (const assignment of rows.results) {
+    const entry =
+      `• <b>${escapeHtml(truncate(assignment.title, 700))}</b>\n` +
+      `  ${escapeHtml(truncate(assignment.course, 160))} · ` +
+      `${new Date(assignment.due_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}\n` +
+      `  ${assignment.submitted ? "✅ Submitted" : "🟠 Not submitted"}`;
+    if (`${message}\n\n${entry}`.length > 3_800) {
+      messages.push(message);
+      message = "🆕 <b>New assignments added (continued)</b>";
+    }
+    message += `\n\n${entry}`;
+  }
+  messages.push(message);
+  for (const part of messages) await send(env, chatId, part);
+
+  const notifiedAt = new Date().toISOString();
+  await env.DB.batch(rows.results.map((assignment) =>
+    env.DB.prepare(
+      "INSERT OR IGNORE INTO new_assignment_notifications(chat_id,assignment_key,notified_at) VALUES(?,?,?)"
+    ).bind(chatId, assignment.assignment_key, notifiedAt)
+  ));
+}
+
 async function handleCommand(env: Env, chatId: number, text: string, origin: string) {
   const command = text.trim().split(/\s+/)[0].split("@")[0].toLowerCase();
   if (command === "/start" || command === "/connect") {
@@ -381,6 +427,7 @@ async function handleCommand(env: Env, chatId: number, text: string, origin: str
     await send(env, chatId, "Checking VOLP…");
     try {
       await syncUser(env, chatId);
+      await markCurrentAssignmentsSeen(env, chatId);
       return sendAssignments(env, chatId);
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
@@ -887,6 +934,7 @@ async function runInitialSync(env: Env, chatId: number) {
   }
   try {
     await syncUser(env, chatId);
+    await markCurrentAssignmentsSeen(env, chatId);
     await send(
       env,
       chatId,
@@ -948,12 +996,14 @@ async function connectSession(request: Request, env: Env, ctx: ExecutionContext)
     if (accountChanged) {
       writes.push(
         env.DB.prepare("DELETE FROM sent_notifications WHERE chat_id=?").bind(claimedSetup.chat_id),
+        env.DB.prepare("DELETE FROM new_assignment_notifications WHERE chat_id=?").bind(claimedSetup.chat_id),
         env.DB.prepare("DELETE FROM assignments WHERE chat_id=?").bind(claimedSetup.chat_id)
       );
     }
     for (const duplicateAccount of duplicateAccounts.results) {
       writes.push(
         env.DB.prepare("DELETE FROM sent_notifications WHERE chat_id=?").bind(duplicateAccount.chat_id),
+        env.DB.prepare("DELETE FROM new_assignment_notifications WHERE chat_id=?").bind(duplicateAccount.chat_id),
         env.DB.prepare("DELETE FROM assignments WHERE chat_id=?").bind(duplicateAccount.chat_id),
         env.DB.prepare("DELETE FROM volp_accounts WHERE chat_id=?").bind(duplicateAccount.chat_id),
         env.DB.prepare("DELETE FROM setup_tokens WHERE chat_id=?").bind(duplicateAccount.chat_id),
@@ -1067,6 +1117,7 @@ export default {
     for (const message of batch.messages) {
       try {
         await processSyncJob(env, message.body.chatId);
+        await sendNewAssignmentNotifications(env, message.body.chatId);
         await env.DB.prepare("UPDATE volp_accounts SET sync_enqueued_at=NULL WHERE chat_id=?")
           .bind(message.body.chatId).run();
         message.ack();

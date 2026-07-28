@@ -12,6 +12,7 @@ A free, shared Telegram bot that checks VOLP for pending assignments and sends d
 - Upcoming assignment list with `/assignments`
 - Manual refresh with `/sync`
 - Assignment checks every three hours
+- Immediate Telegram alerts when a three-hour check discovers new assignments
 - Reminder delivery evaluated every 15 minutes
 - A personal reminder choice: 1 hour, 1.5 hours, or 2 hours before deadlines
 - Settings buttons with `/settings`

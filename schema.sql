@@ -47,6 +47,13 @@ CREATE TABLE IF NOT EXISTS sent_notifications (
   PRIMARY KEY(chat_id, assignment_key, threshold_minutes)
 );
 
+CREATE TABLE IF NOT EXISTS new_assignment_notifications (
+  chat_id INTEGER NOT NULL,
+  assignment_key TEXT NOT NULL,
+  notified_at TEXT NOT NULL,
+  PRIMARY KEY(chat_id, assignment_key)
+);
+
 CREATE TABLE IF NOT EXISTS sync_locks (
   chat_id INTEGER PRIMARY KEY,
   expires_at TEXT NOT NULL
