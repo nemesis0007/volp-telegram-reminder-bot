@@ -56,6 +56,7 @@ function page(content: string) {
   h1{margin-top:0}label{display:block;font-weight:650;margin-top:16px}input{box-sizing:border-box;width:100%;padding:12px;margin-top:6px;border:1px solid #cbd2df;border-radius:10px;font:inherit}
   button{width:100%;padding:13px;margin-top:22px;border:0;border-radius:10px;background:#2864dc;color:white;font:inherit;font-weight:700}
   p{line-height:1.5}.note{font-size:13px;color:#596579}.error{color:#b42318}
+  .check{display:flex;align-items:flex-start;gap:10px;font-weight:600}.check input{width:auto;margin-top:4px}.warning{padding:10px;border-radius:9px;background:#fff4e5;color:#7a4300}
   </style></head><body><main>${content}</main></body></html>`;
 }
 
@@ -201,6 +202,8 @@ async function configureTelegram(env: Env, origin: string) {
         { command: "assignments", description: "View upcoming assignments" },
         { command: "sync", description: "Check VOLP now" },
         { command: "settings", description: "Choose reminder timing" },
+        { command: "security", description: "View automatic login status" },
+        { command: "forgetpassword", description: "Erase the saved VOLP password" },
         { command: "about", description: "About this bot and its privacy" },
         { command: "disconnect", description: "Delete your VOLP connection and data" }
       ]
@@ -331,7 +334,7 @@ async function handleCommand(env: Env, chatId: number, text: string, origin: str
     ).bind(chatId, new Date().toISOString(), DEFAULT_REMINDER_MINUTES).run();
     const link = await makeSetupLink(env, chatId, origin);
     return send(env, chatId,
-      `👋 <b>VOLP Assignment Reminder</b>\n\nConnect your VOLP account using the private link below. It expires in 15 minutes.\n\nYour password goes directly from your browser to VOLP. This bot never receives or stores it.`,
+      `👋 <b>VOLP Assignment Reminder</b>\n\nConnect your VOLP account using the private link below. It expires in 15 minutes.\n\nPassword storage is optional. By default, your password goes directly to VOLP; you may opt into encrypted storage for automatic re-login.`,
       { inline_keyboard: [[{ text: "Connect VOLP 🔐", url: link }], [{ text: "Choose reminder time", callback_data: "reminder:90" }]] });
   }
   if (command === "/assignments") {
@@ -353,7 +356,11 @@ async function handleCommand(env: Env, chatId: number, text: string, origin: str
       return sendAssignments(env, chatId);
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
-      if (message.includes("session expired") || message.includes("not connected")) {
+      if (
+        message.includes("session expired") ||
+        message.includes("not connected") ||
+        message.includes("automatic re-login failed")
+      ) {
         const link = await makeSetupLink(env, chatId, origin);
         return send(
           env,
@@ -370,11 +377,36 @@ async function handleCommand(env: Env, chatId: number, text: string, origin: str
   if (command === "/settings" || command === "/reminder") {
     return showSettings(env, chatId);
   }
+  if (command === "/security") {
+    const account = await env.DB.prepare(
+      "SELECT auto_relogin,last_reauth_at FROM volp_accounts WHERE chat_id=?"
+    ).bind(chatId).first<{ auto_relogin: number; last_reauth_at: string | null }>();
+    if (!account) return send(env, chatId, "No VOLP account is connected.");
+    const status = account.auto_relogin
+      ? "Enabled — the encrypted password may be used to restore an expired VOLP session."
+      : "Disabled — only the encrypted VOLP session token is stored.";
+    const lastLogin = account.last_reauth_at
+      ? `\nLast automatic login: ${new Date(account.last_reauth_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}`
+      : "";
+    return send(env, chatId, `🔐 <b>Automatic re-login</b>\n\n${status}${lastLogin}`);
+  }
+  if (command === "/forgetpassword") {
+    const result = await env.DB.prepare(
+      "UPDATE volp_accounts SET encrypted_password=NULL,auto_relogin=0,last_reauth_at=NULL WHERE chat_id=?"
+    ).bind(chatId).run();
+    return send(
+      env,
+      chatId,
+      result.meta.changes === 1
+        ? "✅ The saved VOLP password was erased. Your current session token remains connected until VOLP expires it."
+        : "No connected VOLP account or saved password was found."
+    );
+  }
   if (command === "/about") {
     return send(
       env,
       chatId,
-      `ℹ️ <b>About VOLP Assignment Reminder</b>\n\nI check VOLP every hour, list upcoming hands-on and subjective assignments, and remind each user at their chosen time.\n\nPasswords go directly from the browser to VOLP and are never received or stored by this bot. VOLP session tokens are encrypted.\n\nOpen-source and unaffiliated with VOLP or VIT.\n\n<a href="${REPOSITORY_URL}">View source code on GitHub</a>`
+      `ℹ️ <b>About VOLP Assignment Reminder</b>\n\nI check VOLP every hour, list upcoming hands-on and subjective assignments, and remind each user at their chosen time.\n\nVOLP session tokens are encrypted. Password storage is optional and opt-in; saved passwords are encrypted and used only for automatic re-login. Use /forgetpassword to erase a saved password.\n\nOpen-source and unaffiliated with VOLP or VIT.\n\n<a href="${REPOSITORY_URL}">View source code on GitHub</a>`
     );
   }
   if (command === "/disconnect") {
@@ -390,7 +422,7 @@ async function handleCommand(env: Env, chatId: number, text: string, origin: str
       }
     );
   }
-  return send(env, chatId, "Commands: /connect, /assignments, /sync, /settings, /about, /disconnect");
+  return send(env, chatId, "Commands: /connect, /assignments, /sync, /settings, /security, /forgetpassword, /about, /disconnect");
 }
 
 function collectHandsOn(
@@ -500,12 +532,44 @@ async function releaseSyncLock(env: Env, chatId: number) {
 }
 
 async function syncUser(env: Env, chatId: number) {
-  const account = await env.DB.prepare("SELECT uid,encrypted_token FROM volp_accounts WHERE chat_id=?").bind(chatId).first<any>();
+  const account = await env.DB.prepare(
+    `SELECT username,uid,encrypted_token,encrypted_password,auto_relogin,last_reauth_at
+     FROM volp_accounts WHERE chat_id=?`
+  ).bind(chatId).first<any>();
   if (!account) throw new Error("VOLP account is not connected");
   try {
-    const token = await decryptSecret(account.encrypted_token, env.CREDENTIAL_KEY);
-    const session = { token, uid: account.uid };
-    const assignments = await fetchAssignments(session);
+    const originalToken = await decryptSecret(account.encrypted_token, env.CREDENTIAL_KEY);
+    let session = { token: originalToken, uid: account.uid };
+    let assignments: Assignment[];
+    let reauthenticatedAt: string | null = null;
+    try {
+      assignments = await fetchAssignments(session);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      if (!message.includes("session expired") || !account.auto_relogin || !account.encrypted_password) throw error;
+
+      const lastAttempt = account.last_reauth_at ? new Date(account.last_reauth_at).getTime() : 0;
+      if (Date.now() - lastAttempt < 15 * 60_000) {
+        throw new Error("VOLP session expired; automatic re-login is cooling down");
+      }
+      reauthenticatedAt = new Date().toISOString();
+      const claimed = await env.DB.prepare(
+        `UPDATE volp_accounts SET last_reauth_at=?
+         WHERE chat_id=? AND encrypted_token=?`
+      ).bind(reauthenticatedAt, chatId, account.encrypted_token).run();
+      if (claimed.meta.changes !== 1) throw new Error("VOLP account changed during automatic login");
+
+      const password = await decryptSecret(account.encrypted_password, env.CREDENTIAL_KEY);
+      const login = await postVolp(
+        "https://admin.volp.in/login/process",
+        { username: account.username, pwd: password }
+      );
+      if (login.flag !== "YES" || !login.token) {
+        throw new Error("VOLP automatic re-login failed. Use /connect to update the saved password.");
+      }
+      session = { token: String(login.token), uid: String(login.uid || account.uid) };
+      assignments = await fetchAssignments(session);
+    }
     const now = new Date().toISOString();
     const currentAccount = await env.DB.prepare(
       "SELECT encrypted_token FROM volp_accounts WHERE chat_id=?"
@@ -550,14 +614,15 @@ async function syncUser(env: Env, chatId: number) {
              AND a.assignment_key=sent_notifications.assignment_key
          )`
     ).bind(chatId).run();
-    const encryptedToken = session.token === token
+    const encryptedToken = session.token === originalToken
       ? account.encrypted_token
       : await encryptSecret(session.token, env.CREDENTIAL_KEY);
     const accountUpdate = await env.DB.prepare(
       `UPDATE volp_accounts
-       SET encrypted_token=?,last_sync_at=?,last_error=NULL
+       SET uid=?,encrypted_token=?,last_reauth_at=COALESCE(?,last_reauth_at),
+           last_sync_at=?,last_error=NULL
        WHERE chat_id=? AND encrypted_token=?`
-    ).bind(encryptedToken, now, chatId, account.encrypted_token).run();
+    ).bind(session.uid, encryptedToken, reauthenticatedAt, now, chatId, account.encrypted_token).run();
     if (accountUpdate.meta.changes !== 1) {
       await env.DB.prepare(
         "DELETE FROM assignments WHERE chat_id=? AND updated_at=?"
@@ -593,6 +658,7 @@ async function sendDueReminders(env: Env, chatId: number, threshold: number) {
 type ScheduledAccount = {
   chat_id: number;
   reminder_minutes: number;
+  auto_relogin: number;
   last_error: string | null;
   last_sync_at: string | null;
 };
@@ -602,13 +668,17 @@ async function processScheduledAccount(env: Env, account: ScheduledAccount) {
   try {
     const lastSync = account.last_sync_at ? new Date(account.last_sync_at).getTime() : 0;
     const syncIsDue = Date.now() - lastSync >= 55 * 60_000;
-    if (syncIsDue && !account.last_error?.includes("session expired")) {
+    const requiresManualReconnect =
+      account.last_error?.includes("session expired") && !account.auto_relogin;
+    if (syncIsDue && !requiresManualReconnect) {
       await syncUser(env, account.chat_id);
     }
     await sendDueReminders(env, account.chat_id, account.reminder_minutes);
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
-    if (message.includes("session expired") && !account.last_error?.includes("session expired")) {
+    const authenticationFailed =
+      message.includes("session expired") || message.includes("automatic re-login failed");
+    if (authenticationFailed && !account.last_error) {
       try {
         await send(env, account.chat_id, "⚠️ Your VOLP session expired. Use /connect to reconnect and resume hourly checks.");
       } catch {
@@ -622,7 +692,7 @@ async function processScheduledAccount(env: Env, account: ScheduledAccount) {
 
 async function runScheduled(env: Env) {
   const accounts = await env.DB.prepare(
-    `SELECT a.chat_id, a.last_sync_at, a.last_error,
+    `SELECT a.chat_id, a.last_sync_at, a.last_error, a.auto_relogin,
             COALESCE(u.reminder_minutes, ?) AS reminder_minutes
      FROM volp_accounts a LEFT JOIN users u ON u.chat_id=a.chat_id`
   ).bind(DEFAULT_REMINDER_MINUTES).all<ScheduledAccount>();
@@ -651,15 +721,19 @@ async function connectGet(env: Env, token: string) {
   const row = await env.DB.prepare("SELECT token FROM setup_tokens WHERE token=? AND expires_at>?").bind(token, new Date().toISOString()).first();
   if (!row) return html(page("<h1>Link expired</h1><p>Return to Telegram and send <b>/connect</b> for a new link.</p>"), 410);
   return html(page(`<h1>Connect through VOLP</h1>
-    <p>Your password is sent <b>directly to VOLP</b>. This bot receives only VOLP's temporary session token.</p>
+    <p>By default, your password is sent <b>directly to VOLP</b> and this bot receives only the temporary session token.</p>
     <p class="note">If this Telegram chat already has a VOLP account, connecting a different one safely replaces it and clears the previous account's cached assignments.</p>
     <form id="connect-form">
       <input type="hidden" id="setup-token" value="${escapeHtml(token)}">
       <label>VOLP username<input name="username" autocomplete="username" required maxlength="160"></label>
       <label>VOLP password<input type="password" name="password" autocomplete="current-password" required maxlength="300"></label>
+      <label class="check"><input type="checkbox" name="rememberPassword">
+        <span>Keep me signed in automatically</span>
+      </label>
+      <p class="note warning">Optional: your password will be sent to this bot and stored encrypted so it can sign in again when VOLP expires the session. Leave unchecked for token-only storage.</p>
       <button type="submit">Sign in directly with VOLP</button>
     </form>
-    <p id="status" class="note">The password never passes through this bot's server. You can disconnect anytime with /disconnect.</p>
+    <p id="status" class="note">Leave automatic re-login unchecked to keep the password-free flow. You can erase all stored data anytime with /disconnect.</p>
     <script>
     const form = document.getElementById("connect-form");
     const status = document.getElementById("status");
@@ -669,6 +743,7 @@ async function connectGet(env: Env, token: string) {
       button.disabled = true;
       status.textContent = "Contacting VOLP…";
       const data = new FormData(form);
+      const rememberPassword = data.get("rememberPassword") === "on";
       try {
         const login = await fetch("https://admin.volp.in/login/process", {
           method: "POST",
@@ -692,11 +767,15 @@ async function connectGet(env: Env, token: string) {
             setupToken: document.getElementById("setup-token").value,
             username: data.get("username"),
             uid: auth.uid || data.get("username"),
-            volpToken: auth.token
+            volpToken: auth.token,
+            rememberPassword,
+            password: rememberPassword ? data.get("password") : null
           })
         });
         if (!saved.ok) throw new Error("Could not save the VOLP session");
-        document.querySelector("main").innerHTML = "<h1>Connected ✅</h1><p>Your password was never shared with the bot. You can close this page and return to Telegram.</p>";
+        document.querySelector("main").innerHTML = rememberPassword
+          ? "<h1>Connected ✅</h1><p>Automatic re-login is enabled. Your password is stored encrypted and can be erased with /forgetpassword or /disconnect.</p>"
+          : "<h1>Connected ✅</h1><p>Your password was not shared with the bot. You can close this page and return to Telegram.</p>";
       } catch (error) {
         status.textContent = "Login failed or VOLP is unavailable. Please try again later.";
         status.className = "error";
@@ -732,8 +811,16 @@ async function connectSession(request: Request, env: Env, ctx: ExecutionContext)
   const username = String(body.username ?? "").trim();
   const uid = String(body.uid ?? "").trim();
   const volpToken = String(body.volpToken ?? "");
+  const rememberPassword = body.rememberPassword === true;
+  const password = rememberPassword ? String(body.password ?? "") : "";
   const setup = await env.DB.prepare("SELECT chat_id FROM setup_tokens WHERE token=? AND expires_at>?").bind(token, new Date().toISOString()).first<{ chat_id: number }>();
-  if (!setup || !username || !uid || !volpToken) return json({ error: "Invalid or expired setup" }, 400);
+  if (
+    !setup || !username || !uid || !volpToken ||
+    username.length > 160 || uid.length > 300 || volpToken.length > 10_000 ||
+    (rememberPassword && (!password || password.length > 300))
+  ) {
+    return json({ error: "Invalid or expired setup" }, 400);
+  }
   try {
     const candidateSession = { token: volpToken, uid };
     const validation = await postVolp(
@@ -756,6 +843,9 @@ async function connectSession(request: Request, env: Env, ctx: ExecutionContext)
     ).bind(uid, claimedSetup.chat_id).all<{ chat_id: number }>();
     const accountChanged = Boolean(existing && existing.uid.toLowerCase() !== uid.toLowerCase());
     const encrypted = await encryptSecret(candidateSession.token, env.CREDENTIAL_KEY);
+    const encryptedPassword = rememberPassword
+      ? await encryptSecret(password, env.CREDENTIAL_KEY)
+      : null;
     const writes = [];
     if (accountChanged) {
       writes.push(
@@ -773,11 +863,22 @@ async function connectSession(request: Request, env: Env, ctx: ExecutionContext)
       );
     }
     writes.push(env.DB.prepare(
-      `INSERT INTO volp_accounts(chat_id,username,uid,encrypted_token,connected_at)
-       VALUES(?,?,?,?,?) ON CONFLICT(chat_id) DO UPDATE SET
+      `INSERT INTO volp_accounts(
+         chat_id,username,uid,encrypted_token,encrypted_password,auto_relogin,connected_at
+       )
+       VALUES(?,?,?,?,?,?,?) ON CONFLICT(chat_id) DO UPDATE SET
        username=excluded.username,uid=excluded.uid,encrypted_token=excluded.encrypted_token,
-       connected_at=excluded.connected_at,last_sync_at=NULL,last_error=NULL`
-    ).bind(claimedSetup.chat_id, username, uid, encrypted, new Date().toISOString()));
+       encrypted_password=excluded.encrypted_password,auto_relogin=excluded.auto_relogin,
+       connected_at=excluded.connected_at,last_reauth_at=NULL,last_sync_at=NULL,last_error=NULL`
+    ).bind(
+      claimedSetup.chat_id,
+      username,
+      uid,
+      encrypted,
+      encryptedPassword,
+      rememberPassword ? 1 : 0,
+      new Date().toISOString()
+    ));
     await env.DB.batch(writes);
     for (const duplicateAccount of duplicateAccounts.results) {
       try {
@@ -793,7 +894,7 @@ async function connectSession(request: Request, env: Env, ctx: ExecutionContext)
     await send(
       env,
       claimedSetup.chat_id,
-      `${accountChanged ? "🔄 VOLP account switched." : "✅ VOLP connected without storing your password."} I’m loading assignments now and will send them automatically.\n\nAfter that, I’ll check every hour. Use /assignments, /sync, or /settings anytime.`,
+      `${accountChanged ? "🔄 VOLP account switched." : "✅ VOLP connected."} ${rememberPassword ? "Automatic re-login is enabled with encrypted password storage." : "Your password was not stored."}\n\nI’m loading assignments now and will send them automatically. After that, I’ll check every hour.`,
       reminderKeyboard(DEFAULT_REMINDER_MINUTES)
     );
     ctx.waitUntil(runInitialSync(env, claimedSetup.chat_id));

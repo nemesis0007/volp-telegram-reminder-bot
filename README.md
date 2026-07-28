@@ -16,14 +16,16 @@ A free, shared Telegram bot that checks VOLP for pending assignments and sends d
 - A personal reminder choice: 1 hour, 1.5 hours, or 2 hours before deadlines
 - Settings buttons with `/settings`
 - An in-bot privacy and project summary with `/about`
+- Optional encrypted password storage for automatic re-login
+- Password removal without disconnecting through `/forgetpassword`
 - Complete credential and assignment deletion with `/disconnect`
 - Support for hands-on and subjective assignments
 
 ## Security model
 
-Users never type VOLP passwords into Telegram. The setup page sends the password directly from the user's browser to VOLP. The Worker never receives or stores it. Only VOLP's temporary session token is encrypted with AES-256-GCM and stored in D1.
+Users never type VOLP passwords into Telegram. By default, the setup page sends the password directly from the browser to VOLP, and only the encrypted temporary session token is stored.
 
-When VOLP expires a session, the user must reconnect. See [SECURITY.md](SECURITY.md).
+Automatic re-login is optional. When selected, the Worker receives and stores the password encrypted with AES-256-GCM, then uses it only when VOLP invalidates the current session. This is not end-to-end encryption: the Worker operator controls the encryption key. See [SECURITY.md](SECURITY.md).
 
 ## Reliability
 
@@ -107,6 +109,8 @@ Open the bot in Telegram and send `/start`. Every user receives their own 15-min
 - `/assignments` — list upcoming assignments
 - `/sync` — check VOLP immediately
 - `/settings` — choose a 1-hour, 1.5-hour, or 2-hour reminder
+- `/security` — view automatic re-login status
+- `/forgetpassword` — erase the saved password while keeping the current session
 - `/about` — view how the bot works, its privacy model, and source link
 - `/disconnect` — permanently delete stored credentials and assignment data
 
