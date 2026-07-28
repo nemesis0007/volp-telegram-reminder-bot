@@ -7,17 +7,17 @@ Do not open a public issue for credential exposure, authentication bypass, or en
 ## Credential handling
 
 - By default, VOLP passwords are sent directly from the user's browser to VOLP and are not shared with the Worker.
-- Users may explicitly opt into automatic re-login. In that mode, the password is sent to the Worker and stored encrypted with AES-256-GCM.
+- Automatic re-login is required. The password is sent to the Worker and stored encrypted with AES-256-GCM.
 - Temporary VOLP session tokens are encrypted with AES-256-GCM using `CREDENTIAL_KEY`.
 - The encryption key is stored as a Cloudflare Worker secret, separately from D1.
-- `/forgetpassword` permanently removes the saved password and disables automatic re-login.
+- `/disconnect` permanently removes the saved password, session, assignments, and preferences.
 - `/disconnect` deletes a user's account credentials, cached assignments, reminders, and preferences.
 - One-time setup links expire after 15 minutes and are deleted after use.
 - Telegram webhook requests require both an unguessable path and Telegram's secret-token header.
 
 ## Operator responsibility
 
-This is not end-to-end encryption. The person operating the Worker controls `CREDENTIAL_KEY` and can decrypt stored VOLP session tokens and opt-in passwords. Operators must:
+This is not end-to-end encryption. The person operating the Worker controls `CREDENTIAL_KEY` and can decrypt stored VOLP session tokens and passwords. Operators must:
 
 - Clearly disclose this trust model to users.
 - Restrict Cloudflare account access and enable multi-factor authentication.
