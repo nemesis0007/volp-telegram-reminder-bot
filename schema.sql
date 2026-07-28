@@ -54,6 +54,13 @@ CREATE TABLE IF NOT EXISTS new_assignment_notifications (
   PRIMARY KEY(chat_id, assignment_key)
 );
 
+CREATE TABLE IF NOT EXISTS daily_digest_log (
+  chat_id INTEGER NOT NULL,
+  digest_date TEXT NOT NULL,
+  sent_at TEXT NOT NULL,
+  PRIMARY KEY(chat_id, digest_date)
+);
+
 CREATE TABLE IF NOT EXISTS sync_locks (
   chat_id INTEGER PRIMARY KEY,
   expires_at TEXT NOT NULL

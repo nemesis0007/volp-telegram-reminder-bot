@@ -294,6 +294,7 @@ async function handleCallback(env: Env, callback: any) {
     await env.DB.batch([
       env.DB.prepare("DELETE FROM sent_notifications WHERE chat_id=?").bind(chatId),
       env.DB.prepare("DELETE FROM new_assignment_notifications WHERE chat_id=?").bind(chatId),
+      env.DB.prepare("DELETE FROM daily_digest_log WHERE chat_id=?").bind(chatId),
       env.DB.prepare("DELETE FROM assignments WHERE chat_id=?").bind(chatId),
       env.DB.prepare("DELETE FROM volp_accounts WHERE chat_id=?").bind(chatId),
       env.DB.prepare("DELETE FROM setup_tokens WHERE chat_id=?").bind(chatId),
@@ -389,6 +390,63 @@ async function sendNewAssignmentNotifications(env: Env, chatId: number) {
       "INSERT OR IGNORE INTO new_assignment_notifications(chat_id,assignment_key,notified_at) VALUES(?,?,?)"
     ).bind(chatId, assignment.assignment_key, notifiedAt)
   ));
+}
+
+function istDateAndHour(now = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(now);
+  const value = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
+  return {
+    date: `${value("year")}-${value("month")}-${value("day")}`,
+    hour: Number(value("hour"))
+  };
+}
+
+async function sendDailyDigest(env: Env, chatId: number, digestDate: string) {
+  const claimed = await env.DB.prepare(
+    "INSERT OR IGNORE INTO daily_digest_log(chat_id,digest_date,sent_at) VALUES(?,?,?)"
+  ).bind(chatId, digestDate, new Date().toISOString()).run();
+  if (claimed.meta.changes !== 1) return;
+
+  try {
+    const now = new Date();
+    const rows = await env.DB.prepare(
+      `SELECT title,course,due_at FROM assignments
+       WHERE chat_id=? AND submitted=0 AND due_at>? AND due_at<=?
+       ORDER BY due_at`
+    ).bind(chatId, now.toISOString(), new Date(now.getTime() + 72 * 60 * 60_000).toISOString()).all<any>();
+    if (!rows.results.length) {
+      return;
+    }
+
+    const entries = rows.results.map((assignment) =>
+      `• <b>${escapeHtml(truncate(assignment.title, 700))}</b>\n` +
+      `  ${escapeHtml(truncate(assignment.course, 160))} · ` +
+      `${new Date(assignment.due_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}`
+    );
+    const messages: string[] = [];
+    let message = "☀️ <b>Due within the next 3 days</b>";
+    for (const entry of entries) {
+      if (`${message}\n\n${entry}`.length > 3_800) {
+        messages.push(message);
+        message = "☀️ <b>Due within the next 3 days (continued)</b>";
+      }
+      message += `\n\n${entry}`;
+    }
+    messages.push(message);
+    for (const part of messages) await send(env, chatId, part);
+  } catch (error) {
+    await env.DB.prepare(
+      "DELETE FROM daily_digest_log WHERE chat_id=? AND digest_date=?"
+    ).bind(chatId, digestDate).run();
+    throw error;
+  }
 }
 
 async function handleCommand(env: Env, chatId: number, text: string, origin: string) {
@@ -777,6 +835,7 @@ async function processScheduledAccount(env: Env, account: ScheduledAccount) {
 async function runScheduled(env: Env) {
   const dueBefore = new Date(Date.now() - (SYNC_INTERVAL_MS - SYNC_DISPATCH_GRACE_MS)).toISOString();
   const redispatchBefore = new Date(Date.now() - 30 * 60_000).toISOString();
+  const istNow = istDateAndHour();
   const accounts = await env.DB.prepare(
     `SELECT a.chat_id, a.last_sync_at, a.last_error, a.auto_relogin,
             COALESCE(u.reminder_minutes, ?) AS reminder_minutes
@@ -807,13 +866,22 @@ async function runScheduled(env: Env) {
     } catch {
       // One unavailable Telegram chat must not stop reminders for other users.
     }
+    if (istNow.hour === 8) {
+      try {
+        await sendDailyDigest(env, account.chat_id, istNow.date);
+      } catch {
+        // The next cron invocation within the hour can retry this user's digest.
+      }
+    }
   }
   const now = new Date().toISOString();
   const updateCutoff = new Date(Date.now() - 7 * 24 * 60 * 60_000).toISOString();
+  const digestCutoff = new Date(Date.now() - 45 * 24 * 60 * 60_000).toISOString().slice(0, 10);
   await env.DB.batch([
     env.DB.prepare("DELETE FROM setup_tokens WHERE expires_at < ?").bind(now),
     env.DB.prepare("DELETE FROM sync_locks WHERE expires_at < ?").bind(now),
     env.DB.prepare("DELETE FROM telegram_updates WHERE received_at < ?").bind(updateCutoff),
+    env.DB.prepare("DELETE FROM daily_digest_log WHERE digest_date < ?").bind(digestCutoff),
     env.DB.prepare("DELETE FROM assignments WHERE due_at < ?").bind(now),
     env.DB.prepare(
       `DELETE FROM sent_notifications
@@ -975,6 +1043,7 @@ async function connectSession(request: Request, env: Env, ctx: ExecutionContext)
       writes.push(
         env.DB.prepare("DELETE FROM sent_notifications WHERE chat_id=?").bind(claimedSetup.chat_id),
         env.DB.prepare("DELETE FROM new_assignment_notifications WHERE chat_id=?").bind(claimedSetup.chat_id),
+        env.DB.prepare("DELETE FROM daily_digest_log WHERE chat_id=?").bind(claimedSetup.chat_id),
         env.DB.prepare("DELETE FROM assignments WHERE chat_id=?").bind(claimedSetup.chat_id)
       );
     }
@@ -982,6 +1051,7 @@ async function connectSession(request: Request, env: Env, ctx: ExecutionContext)
       writes.push(
         env.DB.prepare("DELETE FROM sent_notifications WHERE chat_id=?").bind(duplicateAccount.chat_id),
         env.DB.prepare("DELETE FROM new_assignment_notifications WHERE chat_id=?").bind(duplicateAccount.chat_id),
+        env.DB.prepare("DELETE FROM daily_digest_log WHERE chat_id=?").bind(duplicateAccount.chat_id),
         env.DB.prepare("DELETE FROM assignments WHERE chat_id=?").bind(duplicateAccount.chat_id),
         env.DB.prepare("DELETE FROM volp_accounts WHERE chat_id=?").bind(duplicateAccount.chat_id),
         env.DB.prepare("DELETE FROM setup_tokens WHERE chat_id=?").bind(duplicateAccount.chat_id),
