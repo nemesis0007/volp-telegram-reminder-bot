@@ -6,6 +6,24 @@
   "triggers": {
     "crons": ["*/15 * * * *"]
   },
+  "queues": {
+    "producers": [
+      {
+        "binding": "SYNC_QUEUE",
+        "queue": "volp-sync-jobs"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "volp-sync-jobs",
+        "max_batch_size": 1,
+        "max_batch_timeout": 5,
+        "max_retries": 3,
+        "retry_delay": 300,
+        "max_concurrency": 3
+      }
+    ]
+  },
   "d1_databases": [
     {
       "binding": "DB",

@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS volp_accounts (
   auto_relogin INTEGER NOT NULL DEFAULT 0 CHECK(auto_relogin IN (0, 1)),
   connected_at TEXT NOT NULL,
   last_reauth_at TEXT,
+  sync_enqueued_at TEXT,
   last_sync_at TEXT,
   last_error TEXT,
   FOREIGN KEY(chat_id) REFERENCES users(chat_id) ON DELETE CASCADE

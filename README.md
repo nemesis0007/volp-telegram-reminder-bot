@@ -57,10 +57,11 @@ npm install
 npx wrangler login
 ```
 
-### 2. Create the database
+### 2. Create the database and sync queue
 
 ```bash
 npx wrangler d1 create volp-reminder-bot
+npx wrangler queues create volp-sync-jobs
 ```
 
 Copy `wrangler.example.jsonc` to `wrangler.jsonc`, then replace `PASTE_YOUR_D1_DATABASE_ID` with the ID printed by Wrangler.
@@ -120,6 +121,9 @@ Open the bot in Telegram and send `/start`. Every user receives their own 15-min
 - The project is unaffiliated with VOLP or Vishwakarma Institute of Technology.
 - Do not use it to submit assignments or bypass access controls.
 - Respect Cloudflare and VOLP rate limits. The default sync interval is one hour.
+- Hourly account syncs are processed as individual queue jobs with retries and
+  limited concurrency, preventing one large cron invocation from exhausting its
+  outbound-request limit.
 
 ## Development
 

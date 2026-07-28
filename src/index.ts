@@ -1,9 +1,12 @@
 interface Env {
   DB: D1Database;
+  SYNC_QUEUE: Queue<SyncJob>;
   TELEGRAM_BOT_TOKEN: string;
   WEBHOOK_SECRET: string;
   CREDENTIAL_KEY: string;
 }
+
+type SyncJob = { chatId: number };
 
 type VolpSession = { token: string; uid: string };
 type Assignment = {
@@ -581,15 +584,40 @@ async function syncUser(env: Env, chatId: number) {
     if (!currentAccount || currentAccount.encrypted_token !== account.encrypted_token) {
       throw new Error("VOLP account changed during sync");
     }
-    const writes = assignments.map((item) =>
-      env.DB.prepare(
+    const existing = await env.DB.prepare(
+      `SELECT assignment_key,title,course,assignment_type,due_at,submitted
+       FROM assignments WHERE chat_id=?`
+    ).bind(chatId).all<any>();
+    const existingByKey = new Map(existing.results.map((item) => [item.assignment_key, item]));
+    const incomingKeys = new Set(assignments.map((item) => item.key));
+    const writes = assignments.flatMap((item) => {
+      const previous = existingByKey.get(item.key);
+      const dueAt = item.dueAt.toISOString();
+      const submitted = item.submitted ? 1 : 0;
+      if (previous &&
+          previous.title === item.title &&
+          previous.course === item.course &&
+          previous.assignment_type === item.type &&
+          previous.due_at === dueAt &&
+          previous.submitted === submitted) {
+        return [];
+      }
+      return [env.DB.prepare(
         `INSERT INTO assignments(chat_id,assignment_key,title,course,assignment_type,due_at,submitted,updated_at)
          VALUES(?,?,?,?,?,?,?,?)
          ON CONFLICT(chat_id,assignment_key) DO UPDATE SET
          title=excluded.title,course=excluded.course,assignment_type=excluded.assignment_type,
          due_at=excluded.due_at,submitted=excluded.submitted,updated_at=excluded.updated_at`
-      ).bind(chatId, item.key, item.title, item.course, item.type, item.dueAt.toISOString(), item.submitted ? 1 : 0, now)
-    );
+      ).bind(chatId, item.key, item.title, item.course, item.type, dueAt, submitted, now)];
+    });
+    for (const previous of existing.results) {
+      if (!incomingKeys.has(previous.assignment_key)) {
+        writes.push(
+          env.DB.prepare("DELETE FROM assignments WHERE chat_id=? AND assignment_key=?")
+            .bind(chatId, previous.assignment_key)
+        );
+      }
+    }
     if (writes.length) await env.DB.batch(writes);
     await env.DB.prepare(
       `DELETE FROM assignments
@@ -606,9 +634,6 @@ async function syncUser(env: Env, chatId: number) {
          WHERE duplicate_number > 1
        )`
     ).bind(chatId).run();
-    await env.DB.prepare(
-      "DELETE FROM assignments WHERE chat_id=? AND updated_at<>?"
-    ).bind(chatId, now).run();
     await env.DB.prepare(
       `DELETE FROM sent_notifications
        WHERE chat_id=?
@@ -695,13 +720,38 @@ async function processScheduledAccount(env: Env, account: ScheduledAccount) {
 }
 
 async function runScheduled(env: Env) {
+  const dueBefore = new Date(Date.now() - 55 * 60_000).toISOString();
+  const redispatchBefore = new Date(Date.now() - 30 * 60_000).toISOString();
   const accounts = await env.DB.prepare(
     `SELECT a.chat_id, a.last_sync_at, a.last_error, a.auto_relogin,
             COALESCE(u.reminder_minutes, ?) AS reminder_minutes
      FROM volp_accounts a LEFT JOIN users u ON u.chat_id=a.chat_id`
-  ).bind(DEFAULT_REMINDER_MINUTES).all<ScheduledAccount>();
-  for (let index = 0; index < accounts.results.length; index += 3) {
-    await Promise.all(accounts.results.slice(index, index + 3).map((account) => processScheduledAccount(env, account)));
+  ).bind(DEFAULT_REMINDER_MINUTES).all<ScheduledAccount & { sync_enqueued_at: string | null }>();
+
+  const due = await env.DB.prepare(
+    `SELECT chat_id FROM volp_accounts
+     WHERE (last_sync_at IS NULL OR last_sync_at<?)
+       AND (sync_enqueued_at IS NULL OR sync_enqueued_at<?)
+       AND NOT (auto_relogin=0 AND last_error LIKE '%session expired%')
+     LIMIT 100`
+  ).bind(dueBefore, redispatchBefore).all<{ chat_id: number }>();
+  if (due.results.length) {
+    await env.SYNC_QUEUE.sendBatch(due.results.map((account) => ({
+      body: { chatId: account.chat_id }
+    })));
+    const enqueuedAt = new Date().toISOString();
+    await env.DB.batch(due.results.map((account) =>
+      env.DB.prepare("UPDATE volp_accounts SET sync_enqueued_at=? WHERE chat_id=?")
+        .bind(enqueuedAt, account.chat_id)
+    ));
+  }
+
+  for (const account of accounts.results) {
+    try {
+      await sendDueReminders(env, account.chat_id, account.reminder_minutes);
+    } catch {
+      // One unavailable Telegram chat must not stop reminders for other users.
+    }
   }
   const now = new Date().toISOString();
   const updateCutoff = new Date(Date.now() - 7 * 24 * 60 * 60_000).toISOString();
@@ -719,6 +769,21 @@ async function runScheduled(env: Env) {
        )`
     )
   ]);
+}
+
+async function processSyncJob(env: Env, chatId: number) {
+  if (!(await acquireSyncLock(env, chatId))) return;
+  try {
+    const account = await env.DB.prepare(
+      "SELECT last_sync_at,last_error,auto_relogin FROM volp_accounts WHERE chat_id=?"
+    ).bind(chatId).first<Pick<ScheduledAccount, "last_sync_at" | "last_error" | "auto_relogin">>();
+    if (!account) return;
+    const lastSync = account.last_sync_at ? new Date(account.last_sync_at).getTime() : 0;
+    if (Date.now() - lastSync < 55 * 60_000) return;
+    await syncUser(env, chatId);
+  } finally {
+    await releaseSyncLock(env, chatId);
+  }
 }
 
 async function connectGet(env: Env, token: string) {
@@ -969,5 +1034,29 @@ export default {
   },
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
     ctx.waitUntil(runScheduled(env));
+  },
+
+  async queue(batch: MessageBatch<SyncJob>, env: Env) {
+    for (const message of batch.messages) {
+      try {
+        await processSyncJob(env, message.body.chatId);
+        await env.DB.prepare("UPDATE volp_accounts SET sync_enqueued_at=NULL WHERE chat_id=?")
+          .bind(message.body.chatId).run();
+        message.ack();
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : "";
+        const permanent =
+          detail.includes("session expired") ||
+          detail.includes("automatic re-login failed") ||
+          detail.includes("VOLP account is not connected");
+        if (permanent) {
+          await env.DB.prepare("UPDATE volp_accounts SET sync_enqueued_at=NULL WHERE chat_id=?")
+            .bind(message.body.chatId).run();
+          message.ack();
+        } else {
+          message.retry({ delaySeconds: 300 });
+        }
+      }
+    }
   }
 };
