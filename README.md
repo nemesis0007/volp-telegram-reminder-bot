@@ -4,7 +4,7 @@ A free, shared Telegram bot that checks VOLP for pending assignments and sends d
 
 ## Use the hosted bot
 
-[Open the VOLP Assignment Reminder in Telegram](https://volp-telegram-reminder-bot.physiotwin-numenors.workers.dev/bot), send `/start`, and connect VOLP using the private 15-minute link. No installation is required.
+[Open the VOLP Assignment Reminder in Telegram](https://volp-telegram-reminder-bot.nirajbots.workers.dev/bot), send `/start`, and connect VOLP using the private 15-minute link. No installation is required.
 
 ## What users get
 
@@ -43,6 +43,43 @@ Automatic re-login is required because VOLP sessions are short-lived. The Worker
 
 The implementation follows the official [Telegram webhook documentation](https://core.telegram.org/bots/api#setwebhook), [Telegram bot FAQ](https://core.telegram.org/bots/faq), and [Cloudflare Workers best practices](https://developers.cloudflare.com/workers/best-practices/workers-best-practices/).
 
+## Anonymous usage telemetry
+
+Self-hosted deployments send one aggregate heartbeat per day to the maintainer's
+collector by default. It contains only:
+
+- A randomly generated installation ID
+- The bot version
+- The total number of registered Telegram users
+- The total number of connected VOLP accounts
+
+It does **not** send Telegram IDs, names, VOLP usernames, credentials, tokens,
+assignments, reminder settings, or message contents. The installation ID is
+generated locally and is not tied to a person. This telemetry is used only to
+estimate how many installations and aggregate users are actively using the
+open-source project.
+
+To disable telemetry, set this in `wrangler.jsonc` before deploying:
+
+```jsonc
+"vars": {
+  "TELEMETRY_DISABLED": "true"
+}
+```
+
+Removing the variable does not disable telemetry; it is enabled by default.
+
+The collector is anonymous and has no way to prove that every heartbeat came
+from an unmodified copy, so these figures are useful estimates rather than an
+auditable user count.
+
+The maintainer can see active installations and aggregate users from the last
+30 days with:
+
+```powershell
+npx wrangler d1 execute volp-reminder-bot --remote --command "SELECT COUNT(*) AS active_installations, COALESCE(SUM(user_count), 0) AS aggregate_users, COALESCE(SUM(connected_user_count), 0) AS aggregate_connected_users FROM telemetry_installations WHERE julianday(last_seen_at) >= julianday('now', '-30 days')"
+```
+
 ## Free deployment
 
 Requirements:
@@ -71,6 +108,13 @@ Initialize it:
 
 ```bash
 npm run db:init
+```
+
+For an existing deployment upgrading to version 1.1.0, apply the telemetry
+migration once:
+
+```bash
+npx wrangler d1 execute volp-reminder-bot --remote --file migrations/0010_anonymous_usage_telemetry.sql
 ```
 
 ### 3. Add secrets

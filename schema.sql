@@ -73,6 +73,23 @@ CREATE TABLE IF NOT EXISTS telegram_updates (
   processed_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS telemetry_state (
+  singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+  installation_id TEXT NOT NULL UNIQUE,
+  last_sent_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS telemetry_installations (
+  installation_id TEXT PRIMARY KEY,
+  first_seen_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  version TEXT NOT NULL,
+  user_count INTEGER NOT NULL CHECK(user_count >= 0),
+  connected_user_count INTEGER NOT NULL CHECK(
+    connected_user_count >= 0 AND connected_user_count <= user_count
+  )
+);
+
 CREATE INDEX IF NOT EXISTS idx_assignments_upcoming
 ON assignments(chat_id, submitted, due_at);
 
@@ -81,6 +98,9 @@ ON setup_tokens(expires_at);
 
 CREATE INDEX IF NOT EXISTS idx_telegram_updates_received
 ON telegram_updates(received_at);
+
+CREATE INDEX IF NOT EXISTS idx_telemetry_installations_last_seen
+ON telemetry_installations(last_seen_at);
 
 CREATE TRIGGER IF NOT EXISTS enforce_volp_account_capacity
 BEFORE INSERT ON volp_accounts

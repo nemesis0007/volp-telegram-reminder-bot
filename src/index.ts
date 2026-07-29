@@ -4,9 +4,15 @@ interface Env {
   TELEGRAM_BOT_TOKEN: string;
   WEBHOOK_SECRET: string;
   CREDENTIAL_KEY: string;
+  TELEMETRY_DISABLED?: string;
+  TELEMETRY_COLLECTOR?: string;
 }
 
-type SyncJob = { chatId: number };
+type SyncJob = {
+  chatId: number;
+  manual?: boolean;
+  enqueuedAt?: string;
+};
 
 type VolpSession = { token: string; uid: string };
 type Assignment = {
@@ -33,6 +39,11 @@ const SYNC_INTERVAL_MS = 3 * 60 * 60_000;
 const SYNC_DISPATCH_GRACE_MS = 5 * 60_000;
 const MAX_CONNECTED_ACCOUNTS = 90;
 const REPOSITORY_URL = "https://github.com/nemesis0007/volp-telegram-reminder-bot";
+const BOT_VERSION = "1.1.0";
+const TELEMETRY_ORIGIN = "https://volp-telegram-reminder-bot.nirajbots.workers.dev";
+const TELEMETRY_ENDPOINT = `${TELEMETRY_ORIGIN}/telemetry/v1`;
+const TELEMETRY_INTERVAL_MS = 24 * 60 * 60_000;
+const MAX_TELEMETRY_INSTALLATIONS = 10_000;
 
 function delay(milliseconds: number) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -40,6 +51,108 @@ function delay(milliseconds: number) {
 
 function json(data: unknown, status = 200) {
   return Response.json(data, { status });
+}
+
+function telemetryIsDisabled(env: Env) {
+  return String(env.TELEMETRY_DISABLED ?? "").toLowerCase() === "true";
+}
+
+async function collectUsageTelemetry(request: Request, env: Env) {
+  const raw = await request.text();
+  if (raw.length > 2_048) return json({ error: "Payload too large" }, 413);
+  let body: any;
+  try {
+    body = JSON.parse(raw);
+  } catch {
+    return json({ error: "Invalid JSON" }, 400);
+  }
+  const installationId = String(body.installationId ?? "");
+  const version = String(body.version ?? "");
+  const userCount = Number(body.userCount);
+  const connectedUserCount = Number(body.connectedUserCount);
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(installationId) ||
+    !/^[0-9A-Za-z._-]{1,40}$/.test(version) ||
+    !Number.isInteger(userCount) ||
+    !Number.isInteger(connectedUserCount) ||
+    userCount < 0 ||
+    userCount > 100_000 ||
+    connectedUserCount < 0 ||
+    connectedUserCount > userCount
+  ) {
+    return json({ error: "Invalid telemetry payload" }, 400);
+  }
+  const now = new Date().toISOString();
+  const stored = await env.DB.prepare(
+    `INSERT INTO telemetry_installations(
+       installation_id,first_seen_at,last_seen_at,version,user_count,connected_user_count
+     )
+     SELECT ?,?,?,?,?,?
+     WHERE EXISTS(
+       SELECT 1 FROM telemetry_installations WHERE installation_id=?
+     ) OR (
+       SELECT COUNT(*) FROM telemetry_installations
+     ) < ?
+     ON CONFLICT(installation_id) DO UPDATE SET
+       last_seen_at=excluded.last_seen_at,
+       version=excluded.version,
+       user_count=excluded.user_count,
+       connected_user_count=excluded.connected_user_count`
+  ).bind(
+    installationId,
+    now,
+    now,
+    version,
+    userCount,
+    connectedUserCount,
+    installationId,
+    MAX_TELEMETRY_INSTALLATIONS
+  ).run();
+  if (stored.meta.changes !== 1) {
+    return json({ error: "Telemetry capacity reached" }, 503);
+  }
+  return new Response(null, { status: 204 });
+}
+
+async function sendUsageTelemetry(env: Env) {
+  if (telemetryIsDisabled(env)) return;
+  let state = await env.DB.prepare(
+    "SELECT installation_id,last_sent_at FROM telemetry_state WHERE singleton=1"
+  ).first<{ installation_id: string; last_sent_at: string | null }>();
+  if (!state) {
+    const installationId = crypto.randomUUID();
+    await env.DB.prepare(
+      "INSERT OR IGNORE INTO telemetry_state(singleton,installation_id,last_sent_at) VALUES(1,?,NULL)"
+    ).bind(installationId).run();
+    state = await env.DB.prepare(
+      "SELECT installation_id,last_sent_at FROM telemetry_state WHERE singleton=1"
+    ).first<{ installation_id: string; last_sent_at: string | null }>();
+  }
+  if (!state) return;
+  const lastSent = state.last_sent_at ? new Date(state.last_sent_at).getTime() : 0;
+  if (Date.now() - lastSent < TELEMETRY_INTERVAL_MS) return;
+  const counts = await env.DB.prepare(
+    `SELECT COUNT(*) AS user_count,
+            SUM(CASE WHEN va.chat_id IS NOT NULL THEN 1 ELSE 0 END) AS connected_user_count
+     FROM users u LEFT JOIN volp_accounts va ON va.chat_id=u.chat_id`
+  ).first<{ user_count: number; connected_user_count: number | null }>();
+  const telemetryRequest = new Request(TELEMETRY_ENDPOINT, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      installationId: state.installation_id,
+      version: BOT_VERSION,
+      userCount: counts?.user_count ?? 0,
+      connectedUserCount: counts?.connected_user_count ?? 0
+    })
+  });
+  const response = String(env.TELEMETRY_COLLECTOR ?? "").toLowerCase() === "true"
+    ? await collectUsageTelemetry(telemetryRequest, env)
+    : await fetch(telemetryRequest, { signal: AbortSignal.timeout(10_000) });
+  if (!response.ok) throw new Error(`Telemetry collector returned ${response.status}`);
+  await env.DB.prepare(
+    "UPDATE telemetry_state SET last_sent_at=? WHERE singleton=1 AND installation_id=?"
+  ).bind(new Date().toISOString(), state.installation_id).run();
 }
 
 function html(body: string, status = 200) {
@@ -478,33 +591,31 @@ async function handleCommand(env: Env, chatId: number, text: string, origin: str
     return sendAssignments(env, chatId);
   }
   if (command === "/sync") {
-    if (!(await acquireSyncLock(env, chatId))) {
-      return send(env, chatId, "⏳ I’m already checking VOLP for you. Please wait for the result.");
-    }
-    await send(env, chatId, "Checking VOLP…");
-    try {
-      await syncUser(env, chatId);
-      await markCurrentAssignmentsSeen(env, chatId);
-      return sendAssignments(env, chatId);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "";
-      if (
-        message.includes("session expired") ||
-        message.includes("not connected") ||
-        message.includes("automatic re-login failed")
-      ) {
-        const link = await makeSetupLink(env, chatId, origin);
-        return send(
-          env,
-          chatId,
-          "⚠️ Your VOLP session is no longer valid. Reconnect using the private link below.",
-          { inline_keyboard: [[{ text: "Reconnect VOLP 🔐", url: link }]] }
-        );
+    const enqueuedAt = new Date().toISOString();
+    const redispatchBefore = new Date(Date.now() - 30 * 60_000).toISOString();
+    const queued = await env.DB.prepare(
+      `UPDATE volp_accounts SET sync_enqueued_at=?
+       WHERE chat_id=?
+         AND (sync_enqueued_at IS NULL OR sync_enqueued_at<?)`
+    ).bind(enqueuedAt, chatId, redispatchBefore).run();
+    if (queued.meta.changes !== 1) {
+      const account = await env.DB.prepare(
+        "SELECT 1 AS connected FROM volp_accounts WHERE chat_id=?"
+      ).bind(chatId).first();
+      if (!account) {
+        return send(env, chatId, "Connect your VOLP account first with /connect.");
       }
-      return send(env, chatId, "⚠️ VOLP is unavailable or the sync failed. Please try /sync again later.");
-    } finally {
-      await releaseSyncLock(env, chatId);
+      return send(env, chatId, "⏳ I’m already checking VOLP for you. I’ll message you when it finishes.");
     }
+    try {
+      await env.SYNC_QUEUE.send({ chatId, manual: true, enqueuedAt });
+    } catch {
+      await env.DB.prepare(
+        "UPDATE volp_accounts SET sync_enqueued_at=NULL WHERE chat_id=? AND sync_enqueued_at=?"
+      ).bind(chatId, enqueuedAt).run();
+      return send(env, chatId, "⚠️ I couldn’t queue the VOLP sync. Please try /sync again.");
+    }
+    return send(env, chatId, "⏳ Checking VOLP in the background. I’ll message you when it finishes.");
   }
   if (command === "/settings" || command === "/reminder") {
     return showSettings(env, chatId);
@@ -526,7 +637,7 @@ async function handleCommand(env: Env, chatId: number, text: string, origin: str
     return send(
       env,
       chatId,
-      `ℹ️ <b>About VOLP Assignment Reminder</b>\n\nI check VOLP every 3 hours, list upcoming hands-on and subjective assignments, and remind each user at their chosen time.\n\nVOLP session tokens and passwords are encrypted. The saved password is used only for automatic re-login. Use /disconnect to erase all stored credentials and data.\n\nOpen-source and unaffiliated with VOLP or VIT.\n\n<a href="${REPOSITORY_URL}">View source code on GitHub</a>`
+      `ℹ️ <b>About VOLP Assignment Reminder</b>\n\nI check VOLP every 3 hours, list upcoming hands-on and subjective assignments, and remind each user at their chosen time.\n\nVOLP session tokens and passwords are encrypted. The saved password is used only for automatic re-login. Use /disconnect to erase all stored credentials and data.\n\nSelf-hosted copies send default-on daily anonymous usage totals: a random installation ID, bot version, registered-user count, and connected-account count. No user identities, credentials, assignments, or messages are sent. Operators can disable this in wrangler.jsonc.\n\nOpen-source and unaffiliated with VOLP or VIT.\n\n<a href="${REPOSITORY_URL}">View source code on GitHub</a>`
     );
   }
   if (command === "/disconnect") {
@@ -649,6 +760,17 @@ async function acquireSyncLock(env: Env, chatId: number) {
 
 async function releaseSyncLock(env: Env, chatId: number) {
   await env.DB.prepare("DELETE FROM sync_locks WHERE chat_id=?").bind(chatId).run();
+}
+
+async function clearSyncEnqueued(env: Env, job: SyncJob) {
+  if (job.enqueuedAt) {
+    await env.DB.prepare(
+      "UPDATE volp_accounts SET sync_enqueued_at=NULL WHERE chat_id=? AND sync_enqueued_at=?"
+    ).bind(job.chatId, job.enqueuedAt).run();
+    return;
+  }
+  await env.DB.prepare("UPDATE volp_accounts SET sync_enqueued_at=NULL WHERE chat_id=?")
+    .bind(job.chatId).run();
 }
 
 async function syncUser(env: Env, chatId: number) {
@@ -850,14 +972,23 @@ async function runScheduled(env: Env) {
      LIMIT 100`
   ).bind(dueBefore, redispatchBefore).all<{ chat_id: number }>();
   if (due.results.length) {
-    await env.SYNC_QUEUE.sendBatch(due.results.map((account) => ({
-      body: { chatId: account.chat_id }
-    })));
     const enqueuedAt = new Date().toISOString();
     await env.DB.batch(due.results.map((account) =>
       env.DB.prepare("UPDATE volp_accounts SET sync_enqueued_at=? WHERE chat_id=?")
         .bind(enqueuedAt, account.chat_id)
     ));
+    try {
+      await env.SYNC_QUEUE.sendBatch(due.results.map((account) => ({
+        body: { chatId: account.chat_id, enqueuedAt }
+      })));
+    } catch (error) {
+      await env.DB.batch(due.results.map((account) =>
+        env.DB.prepare(
+          "UPDATE volp_accounts SET sync_enqueued_at=NULL WHERE chat_id=? AND sync_enqueued_at=?"
+        ).bind(account.chat_id, enqueuedAt)
+      ));
+      throw error;
+    }
   }
 
   for (const account of accounts.results) {
@@ -894,15 +1025,17 @@ async function runScheduled(env: Env) {
   ]);
 }
 
-async function processSyncJob(env: Env, chatId: number) {
-  if (!(await acquireSyncLock(env, chatId))) return;
+async function processSyncJob(env: Env, chatId: number, force = false) {
+  if (!(await acquireSyncLock(env, chatId))) {
+    throw new Error("VOLP sync already in progress");
+  }
   try {
     const account = await env.DB.prepare(
       "SELECT last_sync_at,last_error,auto_relogin FROM volp_accounts WHERE chat_id=?"
     ).bind(chatId).first<Pick<ScheduledAccount, "last_sync_at" | "last_error" | "auto_relogin">>();
-    if (!account) return;
+    if (!account) throw new Error("VOLP account is not connected");
     const lastSync = account.last_sync_at ? new Date(account.last_sync_at).getTime() : 0;
-    if (Date.now() - lastSync < SYNC_INTERVAL_MS - SYNC_DISPATCH_GRACE_MS) return;
+    if (!force && Date.now() - lastSync < SYNC_INTERVAL_MS - SYNC_DISPATCH_GRACE_MS) return;
     await syncUser(env, chatId);
   } finally {
     await releaseSyncLock(env, chatId);
@@ -1143,6 +1276,10 @@ export default {
       const info: any = await telegram(env, "getMe", {});
       return Response.redirect(`https://t.me/${info.result.username}`, 302);
     }
+    if (request.method === "POST" && url.pathname === "/telemetry/v1") {
+      if (url.origin !== TELEMETRY_ORIGIN) return new Response("Not found", { status: 404 });
+      return collectUsageTelemetry(request, env);
+    }
     if (url.pathname === "/connect" && request.method === "GET") return connectGet(env, url.searchParams.get("token") ?? "");
     if (url.pathname === "/connect-session" && request.method === "POST") return connectSession(request, env, ctx);
     if (request.method !== "POST" || url.pathname !== `/webhook/${env.WEBHOOK_SECRET}`) return new Response("Not found", { status: 404 });
@@ -1159,28 +1296,81 @@ export default {
   },
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
     ctx.waitUntil(runScheduled(env));
+    ctx.waitUntil(sendUsageTelemetry(env).catch((error) => {
+      console.error("Anonymous usage telemetry failed", error instanceof Error ? error.message : "unknown error");
+    }));
   },
 
   async queue(batch: MessageBatch<SyncJob>, env: Env) {
     for (const message of batch.messages) {
       try {
-        await processSyncJob(env, message.body.chatId);
-        await sendNewAssignmentNotifications(env, message.body.chatId);
-        await env.DB.prepare("UPDATE volp_accounts SET sync_enqueued_at=NULL WHERE chat_id=?")
-          .bind(message.body.chatId).run();
+        await processSyncJob(env, message.body.chatId, message.body.manual === true);
+        if (message.body.manual) {
+          await markCurrentAssignmentsSeen(env, message.body.chatId);
+        } else {
+          await sendNewAssignmentNotifications(env, message.body.chatId);
+        }
+        await clearSyncEnqueued(env, message.body);
         message.ack();
+        if (message.body.manual) {
+          try {
+            await send(env, message.body.chatId, "✅ VOLP sync finished.");
+            await sendAssignments(env, message.body.chatId);
+          } catch {
+            // A completed sync must not be retried just because Telegram is unavailable.
+          }
+        }
       } catch (error) {
         const detail = error instanceof Error ? error.message : "";
+        const coolingDown = detail.includes("automatic re-login is cooling down");
+        if (coolingDown) {
+          const account = await env.DB.prepare(
+            "SELECT last_reauth_at FROM volp_accounts WHERE chat_id=?"
+          ).bind(message.body.chatId).first<{ last_reauth_at: string | null }>();
+          const retryAt = account?.last_reauth_at
+            ? new Date(account.last_reauth_at).getTime() + 15 * 60_000
+            : Date.now() + 60_000;
+          const retryDelaySeconds = Math.max(
+            60,
+            Math.min(15 * 60, Math.ceil((retryAt - Date.now()) / 1000) + 5)
+          );
+          if (message.body.manual && message.attempts === 1) {
+            try {
+              await send(
+                env,
+                message.body.chatId,
+                `🔐 Your VOLP session expired. Automatic login is cooling down, so I’ll retry in about ${Math.ceil(retryDelaySeconds / 60)} minute${retryDelaySeconds > 60 ? "s" : ""}.`
+              );
+            } catch {
+              // The user may have blocked the bot.
+            }
+          }
+          message.retry({ delaySeconds: retryDelaySeconds });
+          continue;
+        }
         const permanent =
           detail.includes("session expired") ||
           detail.includes("automatic re-login failed") ||
           detail.includes("VOLP account is not connected");
-        if (permanent) {
-          await env.DB.prepare("UPDATE volp_accounts SET sync_enqueued_at=NULL WHERE chat_id=?")
-            .bind(message.body.chatId).run();
+        const exhausted = message.attempts >= 3;
+        if (permanent || exhausted) {
+          await clearSyncEnqueued(env, message.body);
           message.ack();
+          if (message.body.manual) {
+            try {
+              await send(
+                env,
+                message.body.chatId,
+                permanent
+                  ? "⚠️ Your VOLP session is no longer valid. Use /connect to reconnect."
+                  : "⚠️ VOLP did not finish syncing after several attempts. Please try /sync again later."
+              );
+            } catch {
+              // The user may have blocked the bot.
+            }
+          }
         } else {
-          message.retry({ delaySeconds: 300 });
+          message.retry({ delaySeconds: detail.includes("already in progress") ? 60 : 300 });
         }
       }
     }

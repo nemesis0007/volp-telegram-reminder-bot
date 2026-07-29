@@ -9,6 +9,10 @@
   "triggers": {
     "crons": ["*/15 * * * *"]
   },
+  "vars": {
+    // Default-on anonymous aggregate usage telemetry. Set to "true" to disable.
+    "TELEMETRY_DISABLED": "false"
+  },
   "queues": {
     "producers": [
       {
