@@ -322,6 +322,7 @@ async function configureTelegram(env: Env, origin: string) {
       commands: [
         { command: "connect", description: "Connect or reconnect your VOLP account" },
         { command: "assignments", description: "View upcoming assignments" },
+        { command: "missed", description: "View missed assignments" },
         { command: "sync", description: "Check VOLP now" },
         { command: "settings", description: "Choose reminder timing" },
         { command: "security", description: "View automatic login status" },
@@ -439,28 +440,85 @@ async function handleCallback(env: Env, callback: any) {
   return showSettings(env, chatId);
 }
 
-async function sendAssignments(env: Env, chatId: number) {
-  const rows = await env.DB.prepare(
-    "SELECT title,course,assignment_type,due_at,submitted FROM assignments WHERE chat_id=? AND due_at>? ORDER BY due_at LIMIT 15"
-  ).bind(chatId, new Date().toISOString()).all<any>();
-  if (!rows.results.length) {
-    return send(env, chatId, "No upcoming assignments found. Use /sync to check VOLP now.");
-  }
-  const entries = rows.results.map(
-    (assignment) =>
-      `• <b>${escapeHtml(truncate(assignment.title, 700))}</b>\n  ${escapeHtml(truncate(assignment.course, 160))} · ${new Date(assignment.due_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}\n  ${assignment.submitted ? "✅ Submitted" : "🟠 Not submitted"}`
-  );
+type StoredAssignment = {
+  title: string;
+  course: string;
+  assignment_type: string;
+  due_at: string;
+  submitted: number;
+};
+
+async function sendAssignmentList(
+  env: Env,
+  chatId: number,
+  rows: StoredAssignment[],
+  heading: string,
+  emptyMessage: string,
+  dateLabel: string
+) {
+  if (!rows.length) return send(env, chatId, emptyMessage);
   const messages: string[] = [];
-  let message = "📚 <b>Upcoming assignments</b>";
-  for (const entry of entries) {
-    if (`${message}\n\n${entry}`.length > 3_800) {
+  let message = heading;
+  let currentCourse: string | null = null;
+  for (const assignment of rows) {
+    const course = truncate(assignment.course, 160);
+    const courseHeading = course === currentCourse ? "" : `\n\n<b>${escapeHtml(course)}</b>`;
+    const entry =
+      `${courseHeading}\n• ${escapeHtml(truncate(assignment.title, 700))}\n` +
+      `  ${escapeHtml(assignment.assignment_type)} · ${dateLabel}: ` +
+      `${new Date(assignment.due_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}\n` +
+      `  ${assignment.submitted ? "✅ Submitted" : "🟠 Not submitted"}`;
+    if (`${message}${entry}`.length > 3_800) {
       messages.push(message);
-      message = "📚 <b>Upcoming assignments (continued)</b>";
+      message = `${heading} <i>(continued)</i>`;
+      currentCourse = "";
+      const repeatedEntry =
+        `\n\n<b>${escapeHtml(course)}</b>\n• ${escapeHtml(truncate(assignment.title, 700))}\n` +
+        `  ${escapeHtml(assignment.assignment_type)} · ${dateLabel}: ` +
+        `${new Date(assignment.due_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}\n` +
+        `  ${assignment.submitted ? "✅ Submitted" : "🟠 Not submitted"}`;
+      message += repeatedEntry;
+    } else {
+      message += entry;
     }
-    message += `\n\n${entry}`;
+    currentCourse = course;
   }
   messages.push(message);
   for (const part of messages) await send(env, chatId, part);
+}
+
+async function sendAssignments(env: Env, chatId: number) {
+  const rows = await env.DB.prepare(
+    `SELECT title,course,assignment_type,due_at,submitted
+     FROM assignments
+     WHERE chat_id=? AND due_at>?
+     ORDER BY course COLLATE NOCASE,due_at`
+  ).bind(chatId, new Date().toISOString()).all<StoredAssignment>();
+  return sendAssignmentList(
+    env,
+    chatId,
+    rows.results,
+    "📚 <b>Upcoming assignments</b>",
+    "No upcoming assignments found. Use /sync to check VOLP now.",
+    "Due"
+  );
+}
+
+async function sendMissedAssignments(env: Env, chatId: number) {
+  const rows = await env.DB.prepare(
+    `SELECT title,course,assignment_type,due_at,submitted
+     FROM assignments
+     WHERE chat_id=? AND due_at<=? AND submitted=0
+     ORDER BY course COLLATE NOCASE,due_at DESC`
+  ).bind(chatId, new Date().toISOString()).all<StoredAssignment>();
+  return sendAssignmentList(
+    env,
+    chatId,
+    rows.results,
+    "🕰 <b>Missed assignments</b>",
+    "🎉 No missed assignments found.",
+    "Was due"
+  );
 }
 
 async function markCurrentAssignmentsSeen(env: Env, chatId: number) {
@@ -600,6 +658,18 @@ async function handleCommand(env: Env, chatId: number, text: string, origin: str
     }
     return sendAssignments(env, chatId);
   }
+  if (command === "/missed") {
+    const account = await env.DB.prepare(
+      "SELECT last_sync_at FROM volp_accounts WHERE chat_id=?"
+    ).bind(chatId).first<{ last_sync_at: string | null }>();
+    if (!account) {
+      return send(env, chatId, "Connect your VOLP account first with /connect.");
+    }
+    if (!account.last_sync_at) {
+      return send(env, chatId, "⏳ Your first VOLP sync is still loading assignments.");
+    }
+    return sendMissedAssignments(env, chatId);
+  }
   if (command === "/sync") {
     if (isVolpMaintenanceWindow()) {
       const account = await env.DB.prepare(
@@ -672,7 +742,7 @@ async function handleCommand(env: Env, chatId: number, text: string, origin: str
       }
     );
   }
-  return send(env, chatId, "Commands: /connect, /assignments, /sync, /settings, /security, /about, /disconnect");
+  return send(env, chatId, "Commands: /connect, /assignments, /missed, /sync, /settings, /security, /about, /disconnect");
 }
 
 function collectHandsOn(
@@ -866,10 +936,15 @@ async function syncUser(env: Env, chatId: number) {
     });
     for (const previous of existing.results) {
       if (!incomingKeys.has(previous.assignment_key)) {
-        writes.push(
-          env.DB.prepare("DELETE FROM assignments WHERE chat_id=? AND assignment_key=?")
-            .bind(chatId, previous.assignment_key)
-        );
+        const missed =
+          !previous.submitted &&
+          new Date(previous.due_at).getTime() <= Date.now();
+        if (!missed) {
+          writes.push(
+            env.DB.prepare("DELETE FROM assignments WHERE chat_id=? AND assignment_key=?")
+              .bind(chatId, previous.assignment_key)
+          );
+        }
       }
     }
     if (writes.length) await env.DB.batch(writes);
@@ -895,6 +970,15 @@ async function syncUser(env: Env, chatId: number) {
            SELECT 1 FROM assignments a
            WHERE a.chat_id=sent_notifications.chat_id
              AND a.assignment_key=sent_notifications.assignment_key
+       )`
+    ).bind(chatId).run();
+    await env.DB.prepare(
+      `DELETE FROM new_assignment_notifications
+       WHERE chat_id=?
+         AND NOT EXISTS (
+           SELECT 1 FROM assignments a
+           WHERE a.chat_id=new_assignment_notifications.chat_id
+             AND a.assignment_key=new_assignment_notifications.assignment_key
          )`
     ).bind(chatId).run();
     const encryptedToken = session.token === originalToken
@@ -1034,13 +1118,21 @@ async function runScheduled(env: Env) {
     env.DB.prepare("DELETE FROM sync_locks WHERE expires_at < ?").bind(now),
     env.DB.prepare("DELETE FROM telegram_updates WHERE received_at < ?").bind(updateCutoff),
     env.DB.prepare("DELETE FROM daily_digest_log WHERE digest_date < ?").bind(digestCutoff),
-    env.DB.prepare("DELETE FROM assignments WHERE due_at < ?").bind(now),
+    env.DB.prepare("DELETE FROM assignments WHERE due_at < ? AND submitted=1").bind(now),
     env.DB.prepare(
       `DELETE FROM sent_notifications
        WHERE NOT EXISTS (
          SELECT 1 FROM assignments a
          WHERE a.chat_id=sent_notifications.chat_id
            AND a.assignment_key=sent_notifications.assignment_key
+       )`
+    ),
+    env.DB.prepare(
+      `DELETE FROM new_assignment_notifications
+       WHERE NOT EXISTS (
+         SELECT 1 FROM assignments a
+         WHERE a.chat_id=new_assignment_notifications.chat_id
+           AND a.assignment_key=new_assignment_notifications.assignment_key
        )`
     )
   ]);

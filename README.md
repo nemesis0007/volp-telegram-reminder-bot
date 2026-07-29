@@ -10,6 +10,7 @@ A free, shared Telegram bot that checks VOLP for pending assignments and sends d
 
 - Private one-time connection link inside Telegram
 - Upcoming assignment list with `/assignments`
+- Missed assignment history with `/missed`
 - Manual refresh with `/sync`
 - Assignment checks every three hours
 - Immediate Telegram alerts when a three-hour check discovers new assignments
@@ -117,6 +118,12 @@ migration once:
 npx wrangler d1 execute volp-reminder-bot --remote --file migrations/0010_anonymous_usage_telemetry.sql
 ```
 
+Apply the missed-assignment migration as well:
+
+```bash
+npx wrangler d1 execute volp-reminder-bot --remote --file migrations/0011_missed_assignments.sql
+```
+
 ### 3. Add secrets
 
 Generate two different random values of at least 32 characters for `WEBHOOK_SECRET` and `CREDENTIAL_KEY`.
@@ -153,6 +160,7 @@ Open the bot in Telegram and send `/start`. Every user receives their own 15-min
 
 - `/start` or `/connect` — create a private VOLP setup link
 - `/assignments` — list upcoming assignments
+- `/missed` — list overdue assignments that were not submitted
 - `/sync` — check VOLP immediately
 - `/settings` — choose a 1-hour, 1.5-hour, or 2-hour reminder
 - `/security` — view automatic re-login status

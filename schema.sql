@@ -118,4 +118,6 @@ WHEN OLD.due_at <> NEW.due_at
 BEGIN
   DELETE FROM sent_notifications
   WHERE chat_id=NEW.chat_id AND assignment_key=NEW.assignment_key;
+  DELETE FROM new_assignment_notifications
+  WHERE chat_id=NEW.chat_id AND assignment_key=NEW.assignment_key;
 END;
