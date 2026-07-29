@@ -44,6 +44,9 @@ const TELEMETRY_ORIGIN = "https://volp-telegram-reminder-bot.nirajbots.workers.d
 const TELEMETRY_ENDPOINT = `${TELEMETRY_ORIGIN}/telemetry/v1`;
 const TELEMETRY_INTERVAL_MS = 24 * 60 * 60_000;
 const MAX_TELEMETRY_INSTALLATIONS = 10_000;
+const VOLP_MAINTENANCE_END_MINUTE_IST = 6 * 60 + 30;
+const VOLP_MAINTENANCE_MESSAGE =
+  "🌙 VOLP is unavailable for scheduled maintenance from 12:00 AM to 6:30 AM. I’ll sync automatically after 6:30 AM.";
 
 function delay(milliseconds: number) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -512,13 +515,20 @@ function istDateAndHour(now = new Date()) {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
+    minute: "2-digit",
     hourCycle: "h23"
   }).formatToParts(now);
   const value = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
   return {
     date: `${value("year")}-${value("month")}-${value("day")}`,
-    hour: Number(value("hour"))
+    hour: Number(value("hour")),
+    minute: Number(value("minute"))
   };
+}
+
+function isVolpMaintenanceWindow(now = new Date()) {
+  const ist = istDateAndHour(now);
+  return ist.hour * 60 + ist.minute < VOLP_MAINTENANCE_END_MINUTE_IST;
 }
 
 async function sendDailyDigest(env: Env, chatId: number, digestDate: string) {
@@ -591,6 +601,15 @@ async function handleCommand(env: Env, chatId: number, text: string, origin: str
     return sendAssignments(env, chatId);
   }
   if (command === "/sync") {
+    if (isVolpMaintenanceWindow()) {
+      const account = await env.DB.prepare(
+        "SELECT 1 AS connected FROM volp_accounts WHERE chat_id=?"
+      ).bind(chatId).first();
+      if (!account) {
+        return send(env, chatId, "Connect your VOLP account first with /connect.");
+      }
+      return send(env, chatId, VOLP_MAINTENANCE_MESSAGE);
+    }
     const enqueuedAt = new Date().toISOString();
     const redispatchBefore = new Date(Date.now() - 30 * 60_000).toISOString();
     const queued = await env.DB.prepare(
@@ -964,30 +983,32 @@ async function runScheduled(env: Env) {
      FROM volp_accounts a LEFT JOIN users u ON u.chat_id=a.chat_id`
   ).bind(DEFAULT_REMINDER_MINUTES).all<ScheduledAccount & { sync_enqueued_at: string | null }>();
 
-  const due = await env.DB.prepare(
-    `SELECT chat_id FROM volp_accounts
-     WHERE (last_sync_at IS NULL OR last_sync_at<?)
-       AND (sync_enqueued_at IS NULL OR sync_enqueued_at<?)
-       AND NOT (auto_relogin=0 AND last_error LIKE '%session expired%')
-     LIMIT 100`
-  ).bind(dueBefore, redispatchBefore).all<{ chat_id: number }>();
-  if (due.results.length) {
-    const enqueuedAt = new Date().toISOString();
-    await env.DB.batch(due.results.map((account) =>
-      env.DB.prepare("UPDATE volp_accounts SET sync_enqueued_at=? WHERE chat_id=?")
-        .bind(enqueuedAt, account.chat_id)
-    ));
-    try {
-      await env.SYNC_QUEUE.sendBatch(due.results.map((account) => ({
-        body: { chatId: account.chat_id, enqueuedAt }
-      })));
-    } catch (error) {
+  if (!isVolpMaintenanceWindow()) {
+    const due = await env.DB.prepare(
+      `SELECT chat_id FROM volp_accounts
+       WHERE (last_sync_at IS NULL OR last_sync_at<?)
+         AND (sync_enqueued_at IS NULL OR sync_enqueued_at<?)
+         AND NOT (auto_relogin=0 AND last_error LIKE '%session expired%')
+       LIMIT 100`
+    ).bind(dueBefore, redispatchBefore).all<{ chat_id: number }>();
+    if (due.results.length) {
+      const enqueuedAt = new Date().toISOString();
       await env.DB.batch(due.results.map((account) =>
-        env.DB.prepare(
-          "UPDATE volp_accounts SET sync_enqueued_at=NULL WHERE chat_id=? AND sync_enqueued_at=?"
-        ).bind(account.chat_id, enqueuedAt)
+        env.DB.prepare("UPDATE volp_accounts SET sync_enqueued_at=? WHERE chat_id=?")
+          .bind(enqueuedAt, account.chat_id)
       ));
-      throw error;
+      try {
+        await env.SYNC_QUEUE.sendBatch(due.results.map((account) => ({
+          body: { chatId: account.chat_id, enqueuedAt }
+        })));
+      } catch (error) {
+        await env.DB.batch(due.results.map((account) =>
+          env.DB.prepare(
+            "UPDATE volp_accounts SET sync_enqueued_at=NULL WHERE chat_id=? AND sync_enqueued_at=?"
+          ).bind(account.chat_id, enqueuedAt)
+        ));
+        throw error;
+      }
     }
   }
 
@@ -1303,6 +1324,18 @@ export default {
 
   async queue(batch: MessageBatch<SyncJob>, env: Env) {
     for (const message of batch.messages) {
+      if (isVolpMaintenanceWindow()) {
+        await clearSyncEnqueued(env, message.body);
+        message.ack();
+        if (message.body.manual) {
+          try {
+            await send(env, message.body.chatId, VOLP_MAINTENANCE_MESSAGE);
+          } catch {
+            // A blocked or deleted Telegram chat must not delay the queue.
+          }
+        }
+        continue;
+      }
       try {
         await processSyncJob(env, message.body.chatId, message.body.manual === true);
         if (message.body.manual) {

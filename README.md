@@ -161,6 +161,9 @@ Open the bot in Telegram and send `/start`. Every user receives their own 15-min
 
 ## Important notes
 
+- VOLP sync requests pause during scheduled maintenance from 12:00 AM through
+  6:29 AM IST. Cached assignment reminders continue, and automatic syncing
+  resumes at 6:30 AM.
 - VOLP has no documented public API. This project uses the same endpoints as its web client; they may change without notice.
 - The project is unaffiliated with VOLP or Vishwakarma Institute of Technology.
 - Do not use it to submit assignments or bypass access controls.
