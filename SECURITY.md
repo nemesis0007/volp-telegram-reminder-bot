@@ -26,6 +26,19 @@ This is not end-to-end encryption. The person operating the Worker controls `CRE
 - Delete all stored credentials when shutting down the service.
 - Obtain users' informed consent before storing credentials.
 
+## Anonymous aggregate telemetry
+
+Self-hosted copies send a default-on daily heartbeat containing a random
+installation ID, bot version, registered-user count, and connected-account
+count. They do not send Telegram identities, VOLP usernames, credentials,
+assignments, settings, or messages. Operators must retain the README disclosure
+and may disable the heartbeat with `TELEMETRY_DISABLED: "true"` in
+`wrangler.jsonc`.
+
+The public collector validates and caps stored records, but an anonymous
+heartbeat cannot be authenticated against modified forks. Aggregate figures
+must therefore be treated as estimates.
+
 ## Limitations
 
 VOLP does not currently expose a documented public API for this use case. Upstream authentication and response formats can change. Failed syncs are isolated per user, but the operator should monitor service health.
