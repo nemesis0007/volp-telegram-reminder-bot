@@ -10,8 +10,14 @@
     "crons": ["*/15 * * * *"]
   },
   "vars": {
-    // Default-on anonymous aggregate usage telemetry. Set to "true" to disable.
     "TELEMETRY_DISABLED": "false"
+  },
+  "secrets": {
+    "required": [
+      "TELEGRAM_BOT_TOKEN",
+      "WEBHOOK_SECRET",
+      "CREDENTIAL_KEY"
+    ]
   },
   "queues": {
     "producers": [
@@ -35,7 +41,7 @@
     {
       "binding": "DB",
       "database_name": "volp-reminder-bot",
-      "database_id": "PASTE_YOUR_D1_DATABASE_ID"
+      "database_id": "00000000-0000-0000-0000-000000000000"
     }
   ]
 }

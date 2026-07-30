@@ -2,6 +2,29 @@
 
 A free, shared Telegram bot that checks VOLP for pending assignments and sends deadline reminders.
 
+## Host your own private bot
+
+Each self-hosted copy uses the owner's own Telegram bot, Cloudflare Worker,
+D1 database, Queue, and encryption key. Other operators never receive that
+copy's VOLP credentials or assignment data.
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/nemesis0007/volp-telegram-reminder-bot)
+
+Quick setup:
+
+1. Create a Telegram bot with [@BotFather](https://t.me/BotFather) and copy its token.
+2. Generate two different random secrets:
+   `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`
+3. Click **Deploy to Cloudflare** and supply the bot token, one random value as
+   `WEBHOOK_SECRET`, and the other as `CREDENTIAL_KEY`.
+4. When deployment finishes, open the Worker URL. That registers the Telegram
+   webhook, configures the command menu, and opens the bot.
+5. Send `/start`.
+
+Cloudflare provisions the Worker, D1 database, and Queue in the self-hoster's
+account. See [SELF_HOSTING.md](SELF_HOSTING.md) for screenshots-free detailed
+instructions, manual CLI deployment, upgrades, and troubleshooting.
+
 ## Use the hosted bot
 
 [Open the VOLP Assignment Reminder in Telegram](https://volp-telegram-reminder-bot.nirajbots.workers.dev/bot), send `/start`, and connect VOLP using the private 15-minute link. No installation is required.
@@ -26,7 +49,9 @@ A free, shared Telegram bot that checks VOLP for pending assignments and sends d
 
 ## Security model
 
-Users never type VOLP passwords into Telegram. By default, the setup page sends the password directly from the browser to VOLP, and only the encrypted temporary session token is stored.
+Users never type VOLP passwords into Telegram. The setup page first sends the
+password directly from the browser to VOLP, then sends it once over HTTPS to the
+self-hosted Worker so automatic re-login can store it encrypted.
 
 Automatic re-login is required because VOLP sessions are short-lived. The Worker receives and stores the password encrypted with AES-256-GCM, then uses it only when VOLP invalidates the current session. This is not end-to-end encryption: the Worker operator controls the encryption key. See [SECURITY.md](SECURITY.md).
 
@@ -36,9 +61,11 @@ Automatic re-login is required because VOLP sessions are short-lived. The Worker
 - Telegram update IDs are deduplicated to prevent repeated commands after delivery retries.
 - Per-user locks prevent manual and automatic syncs from overlapping.
 - Telegram rate limits and temporary VOLP failures use bounded retries and request timeouts.
-- Only future assignments are stored, and indexed cleanup keeps D1 usage small.
+- Upcoming assignments and overdue unsubmitted assignments are stored; submitted
+  past assignments are cleaned up automatically.
 - Connecting a different VOLP account atomically replaces the previous account and clears its cached data.
-- Assignments removed from VOLP are removed locally after the next successful sync.
+- Assignments removed from VOLP are removed locally unless they are overdue and
+  unsubmitted, in which case `/missed` retains them.
 - Deadline changes reset the reminder state, so the updated deadline can notify correctly.
 - VOLP credentials and assignment data are accepted only in private Telegram chats.
 - Disconnect requires confirmation and deletes the session, assignments, reminders, locks, and preferences.
@@ -82,81 +109,6 @@ The maintainer can see active installations and aggregate users from the last
 npx wrangler d1 execute volp-reminder-bot --remote --command "SELECT COUNT(*) AS active_installations, COALESCE(SUM(user_count), 0) AS aggregate_users, COALESCE(SUM(connected_user_count), 0) AS aggregate_connected_users FROM telemetry_installations WHERE julianday(last_seen_at) >= julianday('now', '-30 days')"
 ```
 
-## Free deployment
-
-Requirements:
-
-- A Telegram bot from [@BotFather](https://t.me/BotFather)
-- A free [Cloudflare account](https://dash.cloudflare.com/)
-- Node.js 20 or newer
-
-### 1. Install dependencies
-
-```bash
-npm install
-npx wrangler login
-```
-
-### 2. Create the database and sync queue
-
-```bash
-npx wrangler d1 create volp-reminder-bot
-npx wrangler queues create volp-sync-jobs
-```
-
-Copy `wrangler.example.jsonc` to `wrangler.jsonc`, then replace `PASTE_YOUR_D1_DATABASE_ID` with the ID printed by Wrangler.
-
-Initialize it:
-
-```bash
-npm run db:init
-```
-
-For an existing deployment upgrading to version 1.1.0, apply the telemetry
-migration once:
-
-```bash
-npx wrangler d1 execute volp-reminder-bot --remote --file migrations/0010_anonymous_usage_telemetry.sql
-```
-
-Apply the missed-assignment migration as well:
-
-```bash
-npx wrangler d1 execute volp-reminder-bot --remote --file migrations/0011_missed_assignments.sql
-```
-
-### 3. Add secrets
-
-Generate two different random values of at least 32 characters for `WEBHOOK_SECRET` and `CREDENTIAL_KEY`.
-
-```bash
-npx wrangler secret put TELEGRAM_BOT_TOKEN
-npx wrangler secret put WEBHOOK_SECRET
-npx wrangler secret put CREDENTIAL_KEY
-```
-
-Never put these values in a file or commit them.
-
-### 4. Deploy
-
-```bash
-npm run deploy
-```
-
-Copy the deployed Worker URL. Register the Telegram webhook without printing your bot token:
-
-```bash
-curl -X POST "https://api.telegram.org/bot<YOUR_TOKEN>/setWebhook" \
-  -H "Content-Type: application/json" \
-  -d '{"url":"https://YOUR-WORKER.workers.dev/webhook/YOUR_WEBHOOK_SECRET","secret_token":"YOUR_WEBHOOK_SECRET","allowed_updates":["message","callback_query"]}'
-```
-
-Delete the command from your terminal history afterward, or use a local script that reads secrets from hidden prompts.
-
-### 5. Use it
-
-Open the bot in Telegram and send `/start`. Every user receives their own 15-minute VOLP connection link.
-
 ## Commands
 
 - `/start` or `/connect` — create a private VOLP setup link
@@ -190,7 +142,8 @@ npm run typecheck
 npm run dev
 ```
 
-Copy `wrangler.example.jsonc` to `wrangler.jsonc` and use `.dev.vars` for local secrets. Both are excluded from Git where appropriate.
+Copy `.dev.vars.example` to `.dev.vars` and replace the example values for
+local development. Never commit `.dev.vars`.
 
 ## License
 

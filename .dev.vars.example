@@ -1,0 +1,4 @@
+# Cloudflare's deploy flow asks the self-hoster to replace these values.
+TELEGRAM_BOT_TOKEN=replace-with-your-botfather-token
+WEBHOOK_SECRET=replace-with-a-random-64-character-hex-value
+CREDENTIAL_KEY=replace-with-a-different-random-64-character-hex-value

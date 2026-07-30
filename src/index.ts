@@ -47,7 +47,7 @@ const SYNC_INTERVAL_MS = 3 * 60 * 60_000;
 const SYNC_DISPATCH_GRACE_MS = 5 * 60_000;
 const MAX_CONNECTED_ACCOUNTS = 90;
 const REPOSITORY_URL = "https://github.com/nemesis0007/volp-telegram-reminder-bot";
-const BOT_VERSION = "1.1.0";
+const BOT_VERSION = "1.2.0";
 const TELEMETRY_ORIGIN = "https://volp-telegram-reminder-bot.nirajbots.workers.dev";
 const TELEMETRY_ENDPOINT = `${TELEMETRY_ORIGIN}/telemetry/v1`;
 const TELEMETRY_INTERVAL_MS = 24 * 60 * 60_000;
@@ -1400,6 +1400,9 @@ async function processTelegramUpdate(env: Env, update: any, origin: string) {
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+    if (request.method === "GET" && url.pathname === "/") {
+      return Response.redirect(`${url.origin}/bot`, 302);
+    }
     if (request.method === "GET" && url.pathname === "/health") return json({ ok: true });
     if (request.method === "GET" && url.pathname === "/bot") {
       await configureTelegram(env, url.origin);
