@@ -49,7 +49,7 @@ const MAX_CONNECTED_ACCOUNTS = 90;
 const REPOSITORY_URL = "https://github.com/nemesis0007/volp-telegram-reminder-bot";
 const SELF_HOSTING_GUIDE_URL = `${REPOSITORY_URL}/blob/main/SELF_HOSTING.md`;
 const CLOUDFLARE_DEPLOY_URL = `https://deploy.workers.cloudflare.com/?url=${REPOSITORY_URL}`;
-const BOT_VERSION = "1.3.0";
+const BOT_VERSION = "1.3.1";
 const TELEMETRY_ORIGIN = "https://volp-telegram-reminder-bot.nirajbots.workers.dev";
 const TELEMETRY_ENDPOINT = `${TELEMETRY_ORIGIN}/telemetry/v1`;
 const TELEMETRY_INTERVAL_MS = 24 * 60 * 60_000;
@@ -408,6 +408,15 @@ function selfHostingKeyboard() {
   };
 }
 
+async function showSelfHosting(env: Env, chatId: number) {
+  return send(
+    env,
+    chatId,
+    "🚀 <b>Self-host your own private bot</b>\n\n1. Create a Telegram bot with @BotFather and copy its token.\n2. Tap <b>Deploy on Cloudflare</b> below and sign in to your Cloudflare account.\n3. Enter the Telegram token and generate the two requested random secret values.\n4. After deployment, open your new Worker URL once to configure Telegram.\n5. Open your Telegram bot and send /start.\n\nYour copy uses its own Worker, database, queue, encryption key, and Telegram bot. The detailed guide covers upgrades and troubleshooting.",
+    selfHostingKeyboard()
+  );
+}
+
 async function showSettings(env: Env, chatId: number) {
   const user = await env.DB.prepare("SELECT reminder_minutes FROM users WHERE chat_id=?").bind(chatId).first<{ reminder_minutes: number }>();
   const current = user?.reminder_minutes ?? DEFAULT_REMINDER_MINUTES;
@@ -446,6 +455,10 @@ async function handleCallback(env: Env, callback: any) {
   if (data === "assignments:view") {
     await telegram(env, "answerCallbackQuery", { callback_query_id: callback.id });
     return sendAssignments(env, chatId);
+  }
+  if (data === "selfhost:show") {
+    await telegram(env, "answerCallbackQuery", { callback_query_id: callback.id });
+    return showSelfHosting(env, chatId);
   }
   const match = data.match(/^reminder:(60|90|120)$/);
   if (!match) {
@@ -684,7 +697,7 @@ async function handleCommand(env: Env, chatId: number, text: string, origin: str
         inline_keyboard: [
           [{ text: "Connect VOLP 🔐", url: link }],
           [{ text: "Choose reminder time", callback_data: "reminder:90" }],
-          [{ text: "Self-host your own bot 🚀", url: CLOUDFLARE_DEPLOY_URL }]
+          [{ text: "Self-host your own bot 🚀", callback_data: "selfhost:show" }]
         ]
       });
   }
@@ -762,19 +775,14 @@ async function handleCommand(env: Env, chatId: number, text: string, origin: str
     return send(env, chatId, `🔐 <b>Automatic re-login</b>\n\n${status}${lastLogin}`);
   }
   if (command === "/selfhost") {
-    return send(
-      env,
-      chatId,
-      "🚀 <b>Self-host your own private bot</b>\n\nDeploy an independent copy to your Cloudflare account, connect your own Telegram bot token, and keep your users and credentials in your own database.\n\nCloudflare creates the database and queue automatically. Follow the setup guide to add the three required secrets and activate your bot.",
-      selfHostingKeyboard()
-    );
+    return showSelfHosting(env, chatId);
   }
   if (command === "/about") {
     return send(
       env,
       chatId,
       `ℹ️ <b>About VOLP Assignment Reminder</b>\n\nI check VOLP every 3 hours, list upcoming hands-on and subjective assignments, and remind each user at their chosen time.\n\nVOLP session tokens and passwords are encrypted. The saved password is used only for automatic re-login. Use /disconnect to erase all stored credentials and data.\n\nSelf-hosted copies send default-on daily anonymous usage totals: a random installation ID, bot version, registered-user count, and connected-account count. No user identities, credentials, assignments, or messages are sent. Operators can disable this in wrangler.jsonc.\n\nOpen-source and unaffiliated with VOLP or VIT.`,
-      selfHostingKeyboard()
+      { inline_keyboard: [[{ text: "View source code", url: REPOSITORY_URL }]] }
     );
   }
   if (command === "/disconnect") {
