@@ -47,7 +47,9 @@ const SYNC_INTERVAL_MS = 3 * 60 * 60_000;
 const SYNC_DISPATCH_GRACE_MS = 5 * 60_000;
 const MAX_CONNECTED_ACCOUNTS = 90;
 const REPOSITORY_URL = "https://github.com/nemesis0007/volp-telegram-reminder-bot";
-const BOT_VERSION = "1.2.0";
+const SELF_HOSTING_GUIDE_URL = `${REPOSITORY_URL}/blob/main/SELF_HOSTING.md`;
+const CLOUDFLARE_DEPLOY_URL = `https://deploy.workers.cloudflare.com/?url=${REPOSITORY_URL}`;
+const BOT_VERSION = "1.3.0";
 const TELEMETRY_ORIGIN = "https://volp-telegram-reminder-bot.nirajbots.workers.dev";
 const TELEMETRY_ENDPOINT = `${TELEMETRY_ORIGIN}/telemetry/v1`;
 const TELEMETRY_INTERVAL_MS = 24 * 60 * 60_000;
@@ -334,6 +336,7 @@ async function configureTelegram(env: Env, origin: string) {
         { command: "sync", description: "Check VOLP now" },
         { command: "settings", description: "Choose reminder timing" },
         { command: "security", description: "View automatic login status" },
+        { command: "selfhost", description: "Deploy your own private bot" },
         { command: "about", description: "About this bot and its privacy" },
         { command: "disconnect", description: "Delete your VOLP connection and data" }
       ]
@@ -389,6 +392,18 @@ function reminderKeyboard(current?: number) {
         text: `${minutes === 90 ? "1.5" : minutes / 60} hour${minutes === 60 ? "" : "s"}${current === minutes ? " ✓" : ""}`,
         callback_data: `reminder:${minutes}`
       }))
+    ]
+  };
+}
+
+function selfHostingKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: "Deploy your own bot 🚀", url: CLOUDFLARE_DEPLOY_URL }],
+      [
+        { text: "Setup guide 📖", url: SELF_HOSTING_GUIDE_URL },
+        { text: "Source code", url: REPOSITORY_URL }
+      ]
     ]
   };
 }
@@ -658,13 +673,20 @@ async function handleCommand(env: Env, chatId: number, text: string, origin: str
       return send(
         env,
         chatId,
-        "⛔ <b>Bot capacity reached</b>\n\nNew VOLP connections are temporarily closed to keep reminders reliable. Existing connected users can continue using the bot."
+        "⛔ <b>Bot capacity reached</b>\n\nNew VOLP connections are temporarily closed to keep reminders reliable. Existing connected users can continue using the bot.\n\nYou can deploy your own private copy on Cloudflare instead.",
+        selfHostingKeyboard()
       );
     }
     const link = await makeSetupLink(env, chatId, origin);
     return send(env, chatId,
       `👋 <b>VOLP Assignment Reminder</b>\n\nConnect your VOLP account using the private link below. It expires in 15 minutes.\n\nYour VOLP password will be stored encrypted and used only for automatic re-login. Use /disconnect anytime to erase all stored credentials and data.`,
-      { inline_keyboard: [[{ text: "Connect VOLP 🔐", url: link }], [{ text: "Choose reminder time", callback_data: "reminder:90" }]] });
+      {
+        inline_keyboard: [
+          [{ text: "Connect VOLP 🔐", url: link }],
+          [{ text: "Choose reminder time", callback_data: "reminder:90" }],
+          [{ text: "Self-host your own bot 🚀", url: CLOUDFLARE_DEPLOY_URL }]
+        ]
+      });
   }
   if (command === "/assignments") {
     const account = await env.DB.prepare(
@@ -739,11 +761,20 @@ async function handleCommand(env: Env, chatId: number, text: string, origin: str
       : "";
     return send(env, chatId, `🔐 <b>Automatic re-login</b>\n\n${status}${lastLogin}`);
   }
+  if (command === "/selfhost") {
+    return send(
+      env,
+      chatId,
+      "🚀 <b>Self-host your own private bot</b>\n\nDeploy an independent copy to your Cloudflare account, connect your own Telegram bot token, and keep your users and credentials in your own database.\n\nCloudflare creates the database and queue automatically. Follow the setup guide to add the three required secrets and activate your bot.",
+      selfHostingKeyboard()
+    );
+  }
   if (command === "/about") {
     return send(
       env,
       chatId,
-      `ℹ️ <b>About VOLP Assignment Reminder</b>\n\nI check VOLP every 3 hours, list upcoming hands-on and subjective assignments, and remind each user at their chosen time.\n\nVOLP session tokens and passwords are encrypted. The saved password is used only for automatic re-login. Use /disconnect to erase all stored credentials and data.\n\nSelf-hosted copies send default-on daily anonymous usage totals: a random installation ID, bot version, registered-user count, and connected-account count. No user identities, credentials, assignments, or messages are sent. Operators can disable this in wrangler.jsonc.\n\nOpen-source and unaffiliated with VOLP or VIT.\n\n<a href="${REPOSITORY_URL}">View source code on GitHub</a>`
+      `ℹ️ <b>About VOLP Assignment Reminder</b>\n\nI check VOLP every 3 hours, list upcoming hands-on and subjective assignments, and remind each user at their chosen time.\n\nVOLP session tokens and passwords are encrypted. The saved password is used only for automatic re-login. Use /disconnect to erase all stored credentials and data.\n\nSelf-hosted copies send default-on daily anonymous usage totals: a random installation ID, bot version, registered-user count, and connected-account count. No user identities, credentials, assignments, or messages are sent. Operators can disable this in wrangler.jsonc.\n\nOpen-source and unaffiliated with VOLP or VIT.`,
+      selfHostingKeyboard()
     );
   }
   if (command === "/disconnect") {
@@ -759,7 +790,7 @@ async function handleCommand(env: Env, chatId: number, text: string, origin: str
       }
     );
   }
-  return send(env, chatId, "Commands: /connect, /assignments, /missed, /sync, /settings, /security, /about, /disconnect");
+  return send(env, chatId, "Commands: /connect, /assignments, /missed, /sync, /settings, /security, /selfhost, /about, /disconnect");
 }
 
 function collectHandsOn(
