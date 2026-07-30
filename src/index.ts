@@ -8,11 +8,19 @@ interface Env {
   TELEMETRY_COLLECTOR?: string;
 }
 
-type SyncJob = {
+type SyncRequestJob = {
+  kind?: "sync";
   chatId: number;
   manual?: boolean;
   enqueuedAt?: string;
 };
+
+type SyncResultJob = {
+  kind: "sync-result";
+  chatId: number;
+};
+
+type SyncJob = SyncRequestJob | SyncResultJob;
 
 type VolpSession = { token: string; uid: string };
 type Assignment = {
@@ -504,6 +512,15 @@ async function sendAssignments(env: Env, chatId: number) {
   );
 }
 
+async function deliverSyncResult(env: Env, chatId: number) {
+  return send(
+    env,
+    chatId,
+    "✅ VOLP sync finished. Your assignment data is up to date.",
+    { inline_keyboard: [[{ text: "View assignments 📚", callback_data: "assignments:view" }]] }
+  );
+}
+
 async function sendMissedAssignments(env: Env, chatId: number) {
   const rows = await env.DB.prepare(
     `SELECT title,course,assignment_type,due_at,submitted
@@ -851,7 +868,7 @@ async function releaseSyncLock(env: Env, chatId: number) {
   await env.DB.prepare("DELETE FROM sync_locks WHERE chat_id=?").bind(chatId).run();
 }
 
-async function clearSyncEnqueued(env: Env, job: SyncJob) {
+async function clearSyncEnqueued(env: Env, job: SyncRequestJob) {
   if (job.enqueuedAt) {
     await env.DB.prepare(
       "UPDATE volp_accounts SET sync_enqueued_at=NULL WHERE chat_id=? AND sync_enqueued_at=?"
@@ -1416,6 +1433,25 @@ export default {
 
   async queue(batch: MessageBatch<SyncJob>, env: Env) {
     for (const message of batch.messages) {
+      if (message.body.kind === "sync-result") {
+        try {
+          await deliverSyncResult(env, message.body.chatId);
+          message.ack();
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : "unknown error";
+          console.error(
+            "Manual sync result delivery failed",
+            `attempt=${message.attempts}`,
+            detail
+          );
+          if (message.attempts >= 3) {
+            message.ack();
+          } else {
+            message.retry({ delaySeconds: 60 });
+          }
+        }
+        continue;
+      }
       if (isVolpMaintenanceWindow()) {
         await clearSyncEnqueued(env, message.body);
         message.ack();
@@ -1436,15 +1472,26 @@ export default {
           await sendNewAssignmentNotifications(env, message.body.chatId);
         }
         await clearSyncEnqueued(env, message.body);
-        message.ack();
         if (message.body.manual) {
           try {
-            await send(env, message.body.chatId, "✅ VOLP sync finished.");
-            await sendAssignments(env, message.body.chatId);
-          } catch {
-            // A completed sync must not be retried just because Telegram is unavailable.
+            await env.SYNC_QUEUE.send({
+              kind: "sync-result",
+              chatId: message.body.chatId
+            });
+          } catch (error) {
+            const detail = error instanceof Error ? error.message : "unknown error";
+            console.error("Could not enqueue manual sync result", detail);
+            try {
+              await deliverSyncResult(env, message.body.chatId);
+            } catch (deliveryError) {
+              console.error(
+                "Manual sync result fallback delivery failed",
+                deliveryError instanceof Error ? deliveryError.message : "unknown error"
+              );
+            }
           }
         }
+        message.ack();
       } catch (error) {
         const detail = error instanceof Error ? error.message : "";
         const coolingDown = detail.includes("automatic re-login is cooling down");
