@@ -47,9 +47,9 @@ const SYNC_INTERVAL_MS = 3 * 60 * 60_000;
 const SYNC_DISPATCH_GRACE_MS = 5 * 60_000;
 const MAX_CONNECTED_ACCOUNTS = 90;
 const REPOSITORY_URL = "https://github.com/nemesis0007/volp-telegram-reminder-bot";
+const REPOSITORY_FORK_URL = `${REPOSITORY_URL}/fork`;
 const SELF_HOSTING_GUIDE_URL = `${REPOSITORY_URL}/blob/main/SELF_HOSTING.md`;
-const CLOUDFLARE_DEPLOY_URL = `https://deploy.workers.cloudflare.com/?url=${REPOSITORY_URL}`;
-const BOT_VERSION = "1.3.0";
+const BOT_VERSION = "1.3.2";
 const TELEMETRY_ORIGIN = "https://volp-telegram-reminder-bot.nirajbots.workers.dev";
 const TELEMETRY_ENDPOINT = `${TELEMETRY_ORIGIN}/telemetry/v1`;
 const TELEMETRY_INTERVAL_MS = 24 * 60 * 60_000;
@@ -399,13 +399,22 @@ function reminderKeyboard(current?: number) {
 function selfHostingKeyboard() {
   return {
     inline_keyboard: [
-      [{ text: "Deploy your own bot 🚀", url: CLOUDFLARE_DEPLOY_URL }],
+      [{ text: "Fork on GitHub 🍴", url: REPOSITORY_FORK_URL }],
       [
         { text: "Setup guide 📖", url: SELF_HOSTING_GUIDE_URL },
         { text: "Source code", url: REPOSITORY_URL }
       ]
     ]
   };
+}
+
+async function showSelfHosting(env: Env, chatId: number) {
+  return send(
+    env,
+    chatId,
+    "🍴 <b>Fork and self-host your own private bot</b>\n\n1. Create a Telegram bot with @BotFather and copy its token.\n2. Tap <b>Fork on GitHub</b> below and create the fork in your account.\n3. Clone your fork, run npm install, and sign in with npx wrangler login.\n4. Create the Cloudflare D1 database and Queue, update wrangler.jsonc with the D1 ID, and add the three Worker secrets.\n5. Run npm run deploy, open the new Worker URL once, and send /start to your Telegram bot.\n\nYour fork uses its own Worker, database, queue, encryption key, and Telegram bot. Follow the detailed guide for the exact commands.",
+    selfHostingKeyboard()
+  );
 }
 
 async function showSettings(env: Env, chatId: number) {
@@ -446,6 +455,10 @@ async function handleCallback(env: Env, callback: any) {
   if (data === "assignments:view") {
     await telegram(env, "answerCallbackQuery", { callback_query_id: callback.id });
     return sendAssignments(env, chatId);
+  }
+  if (data === "selfhost:show") {
+    await telegram(env, "answerCallbackQuery", { callback_query_id: callback.id });
+    return showSelfHosting(env, chatId);
   }
   const match = data.match(/^reminder:(60|90|120)$/);
   if (!match) {
@@ -684,7 +697,7 @@ async function handleCommand(env: Env, chatId: number, text: string, origin: str
         inline_keyboard: [
           [{ text: "Connect VOLP 🔐", url: link }],
           [{ text: "Choose reminder time", callback_data: "reminder:90" }],
-          [{ text: "Self-host your own bot 🚀", url: CLOUDFLARE_DEPLOY_URL }]
+          [{ text: "Self-host your own bot 🚀", callback_data: "selfhost:show" }]
         ]
       });
   }
@@ -762,19 +775,14 @@ async function handleCommand(env: Env, chatId: number, text: string, origin: str
     return send(env, chatId, `🔐 <b>Automatic re-login</b>\n\n${status}${lastLogin}`);
   }
   if (command === "/selfhost") {
-    return send(
-      env,
-      chatId,
-      "🚀 <b>Self-host your own private bot</b>\n\nDeploy an independent copy to your Cloudflare account, connect your own Telegram bot token, and keep your users and credentials in your own database.\n\nCloudflare creates the database and queue automatically. Follow the setup guide to add the three required secrets and activate your bot.",
-      selfHostingKeyboard()
-    );
+    return showSelfHosting(env, chatId);
   }
   if (command === "/about") {
     return send(
       env,
       chatId,
       `ℹ️ <b>About VOLP Assignment Reminder</b>\n\nI check VOLP every 3 hours, list upcoming hands-on and subjective assignments, and remind each user at their chosen time.\n\nVOLP session tokens and passwords are encrypted. The saved password is used only for automatic re-login. Use /disconnect to erase all stored credentials and data.\n\nSelf-hosted copies send default-on daily anonymous usage totals: a random installation ID, bot version, registered-user count, and connected-account count. No user identities, credentials, assignments, or messages are sent. Operators can disable this in wrangler.jsonc.\n\nOpen-source and unaffiliated with VOLP or VIT.`,
-      selfHostingKeyboard()
+      { inline_keyboard: [[{ text: "View source code", url: REPOSITORY_URL }]] }
     );
   }
   if (command === "/disconnect") {

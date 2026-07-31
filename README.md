@@ -4,26 +4,23 @@ A free, shared Telegram bot that checks VOLP for pending assignments and sends d
 
 ## Host your own private bot
 
-Each self-hosted copy uses the owner's own Telegram bot, Cloudflare Worker,
+Fork the repository to keep an independent copy under your GitHub account. Each
+self-hosted installation uses the owner's own Telegram bot, Cloudflare Worker,
 D1 database, Queue, and encryption key. Other operators never receive that
 copy's VOLP credentials or assignment data.
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/nemesis0007/volp-telegram-reminder-bot)
+[Fork this repository](https://github.com/nemesis0007/volp-telegram-reminder-bot/fork)
 
 Quick setup:
 
-1. Create a Telegram bot with [@BotFather](https://t.me/BotFather) and copy its token.
-2. Generate two different random secrets:
-   `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`
-3. Click **Deploy to Cloudflare** and supply the bot token, one random value as
-   `WEBHOOK_SECRET`, and the other as `CREDENTIAL_KEY`.
-4. When deployment finishes, open the Worker URL. That registers the Telegram
-   webhook, configures the command menu, and opens the bot.
-5. Send `/start`.
+1. Create a Telegram bot with [@BotFather](https://t.me/BotFather), then fork and clone this repository.
+2. Install dependencies and sign in to Cloudflare with Wrangler.
+3. Create the D1 database and Queue, then put the returned D1 ID in `wrangler.jsonc`.
+4. Add `TELEGRAM_BOT_TOKEN`, `WEBHOOK_SECRET`, and `CREDENTIAL_KEY` as Worker secrets.
+5. Run `npm run deploy`, open the Worker URL once, and send `/start` to the new bot.
 
-Cloudflare provisions the Worker, D1 database, and Queue in the self-hoster's
-account. See [SELF_HOSTING.md](SELF_HOSTING.md) for screenshots-free detailed
-instructions, manual CLI deployment, upgrades, and troubleshooting.
+See [SELF_HOSTING.md](SELF_HOSTING.md) for the exact commands, upgrades, privacy
+settings, and troubleshooting.
 
 ## Use the hosted bot
 
