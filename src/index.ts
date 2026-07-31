@@ -47,9 +47,9 @@ const SYNC_INTERVAL_MS = 3 * 60 * 60_000;
 const SYNC_DISPATCH_GRACE_MS = 5 * 60_000;
 const MAX_CONNECTED_ACCOUNTS = 90;
 const REPOSITORY_URL = "https://github.com/nemesis0007/volp-telegram-reminder-bot";
+const REPOSITORY_FORK_URL = `${REPOSITORY_URL}/fork`;
 const SELF_HOSTING_GUIDE_URL = `${REPOSITORY_URL}/blob/main/SELF_HOSTING.md`;
-const CLOUDFLARE_DEPLOY_URL = `https://deploy.workers.cloudflare.com/?url=${REPOSITORY_URL}`;
-const BOT_VERSION = "1.3.1";
+const BOT_VERSION = "1.3.2";
 const TELEMETRY_ORIGIN = "https://volp-telegram-reminder-bot.nirajbots.workers.dev";
 const TELEMETRY_ENDPOINT = `${TELEMETRY_ORIGIN}/telemetry/v1`;
 const TELEMETRY_INTERVAL_MS = 24 * 60 * 60_000;
@@ -399,7 +399,7 @@ function reminderKeyboard(current?: number) {
 function selfHostingKeyboard() {
   return {
     inline_keyboard: [
-      [{ text: "Deploy your own bot 🚀", url: CLOUDFLARE_DEPLOY_URL }],
+      [{ text: "Fork on GitHub 🍴", url: REPOSITORY_FORK_URL }],
       [
         { text: "Setup guide 📖", url: SELF_HOSTING_GUIDE_URL },
         { text: "Source code", url: REPOSITORY_URL }
@@ -412,7 +412,7 @@ async function showSelfHosting(env: Env, chatId: number) {
   return send(
     env,
     chatId,
-    "🚀 <b>Self-host your own private bot</b>\n\n1. Create a Telegram bot with @BotFather and copy its token.\n2. Tap <b>Deploy on Cloudflare</b> below and sign in to your Cloudflare account.\n3. Enter the Telegram token and generate the two requested random secret values.\n4. After deployment, open your new Worker URL once to configure Telegram.\n5. Open your Telegram bot and send /start.\n\nYour copy uses its own Worker, database, queue, encryption key, and Telegram bot. The detailed guide covers upgrades and troubleshooting.",
+    "🍴 <b>Fork and self-host your own private bot</b>\n\n1. Create a Telegram bot with @BotFather and copy its token.\n2. Tap <b>Fork on GitHub</b> below and create the fork in your account.\n3. Clone your fork, run npm install, and sign in with npx wrangler login.\n4. Create the Cloudflare D1 database and Queue, update wrangler.jsonc with the D1 ID, and add the three Worker secrets.\n5. Run npm run deploy, open the new Worker URL once, and send /start to your Telegram bot.\n\nYour fork uses its own Worker, database, queue, encryption key, and Telegram bot. Follow the detailed guide for the exact commands.",
     selfHostingKeyboard()
   );
 }

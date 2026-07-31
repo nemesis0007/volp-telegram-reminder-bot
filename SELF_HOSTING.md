@@ -4,15 +4,16 @@ Self-hosting gives you an independent bot. Its Telegram token, encryption key,
 VOLP credentials, assignments, D1 database, Queue, and Worker stay in your own
 accounts.
 
-## Recommended: Deploy to Cloudflare
+## Recommended: Fork and deploy with Wrangler
 
 ### Before you start
 
 You need:
 
 - A free [Cloudflare account](https://dash.cloudflare.com/)
-- A GitHub account so Cloudflare can create your copy of the repository
+- A GitHub account for your fork
 - A Telegram bot token from [@BotFather](https://t.me/BotFather)
+- [Git](https://git-scm.com/) and [Node.js 20 or newer](https://nodejs.org/)
 
 In BotFather:
 
@@ -27,49 +28,21 @@ twice:
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
 
-### Deploy
+### Fork and prepare the project
 
-1. Open the deployment flow:
-
-   [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/nemesis0007/volp-telegram-reminder-bot)
-
-2. Sign in to Cloudflare and connect GitHub when prompted.
-3. Choose a name for your new repository and Worker.
-4. Enter these secrets:
-
-   - `TELEGRAM_BOT_TOKEN`: the token from BotFather
-   - `WEBHOOK_SECRET`: the first generated random value
-   - `CREDENTIAL_KEY`: the second generated random value
-
-5. Keep the default D1 database and Queue settings and deploy.
-
-Cloudflare creates a repository copy, Worker, D1 database, Queue, cron trigger,
-and bindings in your account. The deploy command initializes the database schema
-before uploading the Worker.
-
-### Connect Telegram
-
-After deployment, copy the Worker URL shown by Cloudflare. It looks similar to:
-
-```text
-https://your-worker-name.your-subdomain.workers.dev
-```
-
-Open the Worker URL. Its home page redirects to `/bot`, which securely registers
-the webhook using your saved secrets, configures the command menu, and redirects
-you to your Telegram bot. Send `/start` to test it.
-
-## Manual CLI deployment
-
-Use this path if you prefer to fork or clone the repository yourself.
-
-Requirements: Node.js 20 or newer, Git, and a Cloudflare account.
+1. [Fork this repository on GitHub](https://github.com/nemesis0007/volp-telegram-reminder-bot/fork).
+2. Clone your fork, replacing `YOUR-GITHUB-USERNAME`:
 
 ```bash
-git clone https://github.com/nemesis0007/volp-telegram-reminder-bot.git
+git clone https://github.com/YOUR-GITHUB-USERNAME/volp-telegram-reminder-bot.git
 cd volp-telegram-reminder-bot
 npm install
 npx wrangler login
+```
+
+### Create the Cloudflare resources
+
+```bash
 npx wrangler d1 create volp-reminder-bot
 npx wrangler queues create volp-sync-jobs
 ```
@@ -82,7 +55,9 @@ Open `wrangler.jsonc` and replace:
 
 with the D1 database ID printed by `wrangler d1 create`.
 
-Add the secrets. Wrangler prompts without putting them in source control:
+### Add the Worker secrets
+
+Run each command and paste the corresponding value when Wrangler asks for it:
 
 ```bash
 npx wrangler secret put TELEGRAM_BOT_TOKEN
@@ -90,14 +65,33 @@ npx wrangler secret put WEBHOOK_SECRET
 npx wrangler secret put CREDENTIAL_KEY
 ```
 
-Deploy:
+- `TELEGRAM_BOT_TOKEN`: the token from BotFather
+- `WEBHOOK_SECRET`: the first generated random value
+- `CREDENTIAL_KEY`: the second generated random value
+
+Wrangler stores these as encrypted Cloudflare secrets; do not commit them to the
+fork.
+
+### Deploy
 
 ```bash
 npm run deploy
 ```
 
-This initializes the D1 schema and deploys the Worker. Open the printed Worker
-URL, then send `/start` in Telegram.
+This initializes the D1 schema and deploys the Worker, Queue bindings, consumer,
+and cron trigger from your fork.
+
+### Connect Telegram
+
+After deployment, copy the Worker URL shown by Cloudflare. It looks similar to:
+
+```text
+https://your-worker-name.your-subdomain.workers.dev
+```
+
+Open the Worker URL. Its home page redirects to `/bot`, which securely registers
+the webhook using your saved secrets, configures the command menu, and redirects
+you to your Telegram bot. Send `/start` to test it.
 
 ## Updating an existing installation
 
