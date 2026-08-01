@@ -12,12 +12,14 @@ type SyncRequestJob = {
   kind?: "sync";
   chatId: number;
   manual?: boolean;
+  initial?: boolean;
   enqueuedAt?: string;
 };
 
 type SyncResultJob = {
   kind: "sync-result";
   chatId: number;
+  initial?: boolean;
 };
 
 type SyncJob = SyncRequestJob | SyncResultJob;
@@ -49,7 +51,7 @@ const MAX_CONNECTED_ACCOUNTS = 90;
 const REPOSITORY_URL = "https://github.com/nemesis0007/volp-telegram-reminder-bot";
 const REPOSITORY_FORK_URL = `${REPOSITORY_URL}/fork`;
 const SELF_HOSTING_GUIDE_URL = `${REPOSITORY_URL}/blob/main/SELF_HOSTING.md`;
-const BOT_VERSION = "1.3.2";
+const BOT_VERSION = "1.3.3";
 const TELEMETRY_ORIGIN = "https://volp-telegram-reminder-bot.nirajbots.workers.dev";
 const TELEMETRY_ENDPOINT = `${TELEMETRY_ORIGIN}/telemetry/v1`;
 const TELEMETRY_INTERVAL_MS = 24 * 60 * 60_000;
@@ -540,11 +542,13 @@ async function sendAssignments(env: Env, chatId: number) {
   );
 }
 
-async function deliverSyncResult(env: Env, chatId: number) {
+async function deliverSyncResult(env: Env, chatId: number, initial = false) {
   return send(
     env,
     chatId,
-    "✅ VOLP sync finished. Your assignment data is up to date.",
+    initial
+      ? "✅ Your assignments are loaded. I’ll now check VOLP every 3 hours."
+      : "✅ VOLP sync finished. Your assignment data is up to date.",
     { inline_keyboard: [[{ text: "View assignments 📚", callback_data: "assignments:view" }]] }
   );
 }
@@ -1273,33 +1277,7 @@ async function connectGet(env: Env, token: string) {
     </script>`));
 }
 
-async function runInitialSync(env: Env, chatId: number) {
-  let lockAcquired = false;
-  for (let attempt = 0; attempt < 5 && !lockAcquired; attempt++) {
-    lockAcquired = await acquireSyncLock(env, chatId);
-    if (!lockAcquired) await delay(2_000);
-  }
-  if (!lockAcquired) {
-    await send(env, chatId, "⏳ Your account was switched while another sync was finishing. Use /sync in a moment.");
-    return;
-  }
-  try {
-    await syncUser(env, chatId);
-    await markCurrentAssignmentsSeen(env, chatId);
-    await send(
-      env,
-      chatId,
-      "✅ Your assignments are loaded.",
-      { inline_keyboard: [[{ text: "View assignments 📚", callback_data: "assignments:view" }]] }
-    );
-  } catch {
-    await send(env, chatId, "⚠️ Your VOLP account connected, but the first assignment sync failed. Please try /sync.");
-  } finally {
-    await releaseSyncLock(env, chatId);
-  }
-}
-
-async function connectSession(request: Request, env: Env, ctx: ExecutionContext) {
+async function connectSession(request: Request, env: Env) {
   const body = await request.json<any>();
   const token = String(body.setupToken ?? "");
   const username = String(body.username ?? "").trim();
@@ -1389,13 +1367,31 @@ async function connectSession(request: Request, env: Env, ctx: ExecutionContext)
         // The previous Telegram chat may no longer be reachable.
       }
     }
+    const enqueuedAt = new Date().toISOString();
+    await env.DB.prepare(
+      "UPDATE volp_accounts SET sync_enqueued_at=? WHERE chat_id=?"
+    ).bind(enqueuedAt, claimedSetup.chat_id).run();
+    let initialSyncQueued = true;
+    try {
+      await env.SYNC_QUEUE.send({
+        chatId: claimedSetup.chat_id,
+        initial: true,
+        enqueuedAt
+      });
+    } catch {
+      initialSyncQueued = false;
+      await env.DB.prepare(
+        "UPDATE volp_accounts SET sync_enqueued_at=NULL WHERE chat_id=? AND sync_enqueued_at=?"
+      ).bind(claimedSetup.chat_id, enqueuedAt).run();
+    }
     await send(
       env,
       claimedSetup.chat_id,
-      `${accountChanged ? "🔄 VOLP account switched." : "✅ VOLP connected."} Automatic re-login is enabled with encrypted password storage.\n\nI’m loading assignments now and will send them automatically. After that, I’ll check every 3 hours.`,
+      `${accountChanged ? "🔄 VOLP account switched." : "✅ VOLP connected."} Automatic re-login is enabled with encrypted password storage.\n\n${initialSyncQueued
+        ? "I’ve queued your first assignment sync and will message you when it finishes. After that, I’ll check every 3 hours."
+        : "I couldn’t queue your first assignment sync. Please send /sync in Telegram."}`,
       reminderKeyboard(DEFAULT_REMINDER_MINUTES)
     );
-    ctx.waitUntil(runInitialSync(env, claimedSetup.chat_id));
     return json({ ok: true });
   } catch (error) {
     if (error instanceof Error && error.message.includes("BOT_CAPACITY_REACHED")) {
@@ -1453,7 +1449,7 @@ export default {
       return collectUsageTelemetry(request, env);
     }
     if (url.pathname === "/connect" && request.method === "GET") return connectGet(env, url.searchParams.get("token") ?? "");
-    if (url.pathname === "/connect-session" && request.method === "POST") return connectSession(request, env, ctx);
+    if (url.pathname === "/connect-session" && request.method === "POST") return connectSession(request, env);
     if (request.method !== "POST" || url.pathname !== `/webhook/${env.WEBHOOK_SECRET}`) return new Response("Not found", { status: 404 });
     if (request.headers.get("X-Telegram-Bot-Api-Secret-Token") !== env.WEBHOOK_SECRET) return new Response("Forbidden", { status: 403 });
     const update: any = await request.json();
@@ -1477,12 +1473,12 @@ export default {
     for (const message of batch.messages) {
       if (message.body.kind === "sync-result") {
         try {
-          await deliverSyncResult(env, message.body.chatId);
+          await deliverSyncResult(env, message.body.chatId, message.body.initial === true);
           message.ack();
         } catch (error) {
           const detail = error instanceof Error ? error.message : "unknown error";
           console.error(
-            "Manual sync result delivery failed",
+            "Sync result delivery failed",
             `attempt=${message.attempts}`,
             detail
           );
@@ -1495,6 +1491,23 @@ export default {
         continue;
       }
       if (isVolpMaintenanceWindow()) {
+        if (message.body.initial) {
+          try {
+            const now = new Date();
+            const istMinutes = (now.getUTCHours() * 60 + now.getUTCMinutes() + 330) % (24 * 60);
+            const delaySeconds = Math.max(60, (VOLP_MAINTENANCE_END_MINUTE_IST - istMinutes) * 60 + 30);
+            await env.SYNC_QUEUE.send(message.body, { delaySeconds });
+            message.ack();
+            try {
+              await send(env, message.body.chatId, VOLP_MAINTENANCE_MESSAGE);
+            } catch {
+              // The user may have blocked the bot.
+            }
+          } catch {
+            message.retry({ delaySeconds: 300 });
+          }
+          continue;
+        }
         await clearSyncEnqueued(env, message.body);
         message.ack();
         if (message.body.manual) {
@@ -1507,27 +1520,29 @@ export default {
         continue;
       }
       try {
-        await processSyncJob(env, message.body.chatId, message.body.manual === true);
-        if (message.body.manual) {
+        const userRequestedResult = message.body.manual === true || message.body.initial === true;
+        await processSyncJob(env, message.body.chatId, userRequestedResult);
+        if (userRequestedResult) {
           await markCurrentAssignmentsSeen(env, message.body.chatId);
         } else {
           await sendNewAssignmentNotifications(env, message.body.chatId);
         }
         await clearSyncEnqueued(env, message.body);
-        if (message.body.manual) {
+        if (userRequestedResult) {
           try {
             await env.SYNC_QUEUE.send({
               kind: "sync-result",
-              chatId: message.body.chatId
+              chatId: message.body.chatId,
+              initial: message.body.initial === true
             });
           } catch (error) {
             const detail = error instanceof Error ? error.message : "unknown error";
-            console.error("Could not enqueue manual sync result", detail);
+            console.error("Could not enqueue sync result", detail);
             try {
-              await deliverSyncResult(env, message.body.chatId);
+              await deliverSyncResult(env, message.body.chatId, message.body.initial === true);
             } catch (deliveryError) {
               console.error(
-                "Manual sync result fallback delivery failed",
+                "Sync result fallback delivery failed",
                 deliveryError instanceof Error ? deliveryError.message : "unknown error"
               );
             }
@@ -1548,7 +1563,7 @@ export default {
             60,
             Math.min(15 * 60, Math.ceil((retryAt - Date.now()) / 1000) + 5)
           );
-          if (message.body.manual && message.attempts === 1) {
+          if ((message.body.manual || message.body.initial) && message.attempts === 1) {
             try {
               await send(
                 env,
@@ -1570,7 +1585,7 @@ export default {
         if (permanent || exhausted) {
           await clearSyncEnqueued(env, message.body);
           message.ack();
-          if (message.body.manual) {
+          if (message.body.manual || message.body.initial) {
             try {
               await send(
                 env,
