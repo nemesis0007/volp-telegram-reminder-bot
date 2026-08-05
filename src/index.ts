@@ -22,7 +22,26 @@ type SyncResultJob = {
   initial?: boolean;
 };
 
-type SyncJob = SyncRequestJob | SyncResultJob;
+type SyncCourseJob = {
+  kind: "sync-course";
+  chatId: number;
+  runId: string;
+  position: number;
+  manual?: boolean;
+  initial?: boolean;
+  enqueuedAt: string;
+};
+
+type SyncFinalizeJob = {
+  kind: "sync-finalize";
+  chatId: number;
+  runId: string;
+  manual?: boolean;
+  initial?: boolean;
+  enqueuedAt: string;
+};
+
+type SyncJob = SyncRequestJob | SyncResultJob | SyncCourseJob | SyncFinalizeJob;
 
 type VolpSession = { token: string; uid: string };
 type Assignment = {
@@ -51,7 +70,7 @@ const MAX_CONNECTED_ACCOUNTS = 90;
 const REPOSITORY_URL = "https://github.com/nemesis0007/volp-telegram-reminder-bot";
 const REPOSITORY_FORK_URL = `${REPOSITORY_URL}/fork`;
 const SELF_HOSTING_GUIDE_URL = `${REPOSITORY_URL}/blob/main/SELF_HOSTING.md`;
-const BOT_VERSION = "1.3.3";
+const BOT_VERSION = "1.3.4";
 const TELEMETRY_ORIGIN = "https://volp-telegram-reminder-bot.nirajbots.workers.dev";
 const TELEMETRY_ENDPOINT = `${TELEMETRY_ORIGIN}/telemetry/v1`;
 const TELEMETRY_INTERVAL_MS = 24 * 60 * 60_000;
@@ -447,6 +466,7 @@ async function handleCallback(env: Env, callback: any) {
       env.DB.prepare("DELETE FROM new_assignment_notifications WHERE chat_id=?").bind(chatId),
       env.DB.prepare("DELETE FROM daily_digest_log WHERE chat_id=?").bind(chatId),
       env.DB.prepare("DELETE FROM assignments WHERE chat_id=?").bind(chatId),
+      env.DB.prepare("DELETE FROM sync_runs WHERE chat_id=?").bind(chatId),
       env.DB.prepare("DELETE FROM volp_accounts WHERE chat_id=?").bind(chatId),
       env.DB.prepare("DELETE FROM setup_tokens WHERE chat_id=?").bind(chatId),
       env.DB.prepare("DELETE FROM sync_locks WHERE chat_id=?").bind(chatId),
@@ -826,7 +846,7 @@ function collectHandsOn(
   }
 }
 
-async function fetchAssignments(session: VolpSession): Promise<Assignment[]> {
+async function fetchCourseList(session: VolpSession): Promise<any[]> {
   const courseData = await postVolp(
     "https://learner.volp.in/learnerCourseDashboard/learnerCourseList", {}, session, "/learner/my-courses"
   );
@@ -835,46 +855,48 @@ async function fetchAssignments(session: VolpSession): Promise<Assignment[]> {
   }
   // VOLP reports some newly registered/current courses with a falsy
   // course_status even though they are available to the learner.
-  const courses = (courseData.col_list ?? []).filter((course: any) => !course.is_archived);
+  return (courseData.col_list ?? []).filter((course: any) => !course.is_archived);
+}
+
+async function fetchCourseAssignments(course: any, session: VolpSession): Promise<Assignment[]> {
   const found: Assignment[] = [];
-  for (const course of courses) {
-    const courseName = stripHtml(course.course?.course_name) || "Course";
-    await postVolp(
-      "https://learner.volp.in/learnerCourseDashboard/startCourse",
-      { colid: course.colid }, session, "/learner-course-overview"
+  const courseName = stripHtml(course.course?.course_name) || "Course";
+  await postVolp(
+    "https://learner.volp.in/learnerCourseDashboard/startCourse",
+    { colid: course.colid }, session, "/learner-course-overview"
+  );
+  const content = await postVolp(
+    "https://learner.volp.in/learnerCourseContent/courseContentData",
+    { colid: course.colid }, session, "/learner-course-content"
+  );
+  const courseId =
+    content.course_id ||
+    course.crsid ||
+    course.course_id ||
+    course.course?.course_id ||
+    course.course?.crsid;
+  if (courseId && (content.course_level?.assigns?.hands?.length ?? 0) > 0) {
+    const data = await postVolp(
+      "https://learner.volp.in/HandOnAssignment/getHandsOnDetails",
+      {
+        course_offering_learner_id: course.colid,
+        courseId,
+        type: "content"
+      },
+      session, "/learner-handson-assignment"
     );
-    const content = await postVolp(
-      "https://learner.volp.in/learnerCourseContent/courseContentData",
-      { colid: course.colid }, session, "/learner-course-content"
+    collectHandsOn(found, data.ass_list ?? [], courseName, courseId);
+  }
+  for (const unit of content.unit_level ?? []) {
+    if (!(unit.assigns?.hands ?? []).length) continue;
+    const data = await postVolp(
+      "https://learner.volp.in/HandOnAssignment/getHandsOnDetails",
+      { course_offering_learner_id: course.colid, outline: unit.unit_id, type: "content" },
+      session, "/learner-handson-assignment"
     );
-    const courseId =
-      content.course_id ||
-      course.crsid ||
-      course.course_id ||
-      course.course?.course_id ||
-      course.course?.crsid;
-    if (courseId && (content.course_level?.assigns?.hands?.length ?? 0) > 0) {
-      const data = await postVolp(
-        "https://learner.volp.in/HandOnAssignment/getHandsOnDetails",
-        {
-          course_offering_learner_id: course.colid,
-          courseId,
-          type: "content"
-        },
-        session, "/learner-handson-assignment"
-      );
-      collectHandsOn(found, data.ass_list ?? [], courseName, courseId);
-    }
-    for (const unit of content.unit_level ?? []) {
-      if (!(unit.assigns?.hands ?? []).length) continue;
-      const data = await postVolp(
-        "https://learner.volp.in/HandOnAssignment/getHandsOnDetails",
-        { course_offering_learner_id: course.colid, outline: unit.unit_id, type: "content" },
-        session, "/learner-handson-assignment"
-      );
-      collectHandsOn(found, data.ass_list ?? [], courseName, unit.unit_id);
-    }
-    if (!courseId || (content.course_level?.assigns?.proj?.length ?? 0) === 0) continue;
+    collectHandsOn(found, data.ass_list ?? [], courseName, unit.unit_id);
+  }
+  if (courseId && (content.course_level?.assigns?.proj?.length ?? 0) > 0) {
     const subjective = await postVolp(
       "https://learner.volp.in/SubjectiveAssignment/getSubjectiveAssignment_new",
       { course_offering_learner_id: course.colid, courseId, type: "content" },
@@ -911,7 +933,7 @@ async function releaseSyncLock(env: Env, chatId: number) {
   await env.DB.prepare("DELETE FROM sync_locks WHERE chat_id=?").bind(chatId).run();
 }
 
-async function clearSyncEnqueued(env: Env, job: SyncRequestJob) {
+async function clearSyncEnqueued(env: Env, job: { chatId: number; enqueuedAt?: string }) {
   if (job.enqueuedAt) {
     await env.DB.prepare(
       "UPDATE volp_accounts SET sync_enqueued_at=NULL WHERE chat_id=? AND sync_enqueued_at=?"
@@ -922,7 +944,11 @@ async function clearSyncEnqueued(env: Env, job: SyncRequestJob) {
     .bind(job.chatId).run();
 }
 
-async function syncUser(env: Env, chatId: number) {
+async function withAccountSession<T>(
+  env: Env,
+  chatId: number,
+  operation: (session: VolpSession) => Promise<T>
+): Promise<T> {
   const account = await env.DB.prepare(
     `SELECT username,uid,encrypted_token,encrypted_password,auto_relogin,last_reauth_at
      FROM volp_accounts WHERE chat_id=?`
@@ -931,10 +957,10 @@ async function syncUser(env: Env, chatId: number) {
   try {
     const originalToken = await decryptSecret(account.encrypted_token, env.CREDENTIAL_KEY);
     let session = { token: originalToken, uid: account.uid };
-    let assignments: Assignment[];
     let reauthenticatedAt: string | null = null;
+    let result: T;
     try {
-      assignments = await fetchAssignments(session);
+      result = await operation(session);
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
       if (!message.includes("session expired") || !account.auto_relogin || !account.encrypted_password) throw error;
@@ -959,56 +985,232 @@ async function syncUser(env: Env, chatId: number) {
         throw new Error("VOLP automatic re-login failed. Use /connect to update the saved password.");
       }
       session = { token: String(login.token), uid: String(login.uid || account.uid) };
-      assignments = await fetchAssignments(session);
+      result = await operation(session);
     }
-    const now = new Date().toISOString();
-    const currentAccount = await env.DB.prepare(
-      "SELECT encrypted_token FROM volp_accounts WHERE chat_id=?"
-    ).bind(chatId).first<{ encrypted_token: string }>();
-    if (!currentAccount || currentAccount.encrypted_token !== account.encrypted_token) {
+    const encryptedToken = session.token === originalToken
+      ? account.encrypted_token
+      : await encryptSecret(session.token, env.CREDENTIAL_KEY);
+    const accountUpdate = await env.DB.prepare(
+      `UPDATE volp_accounts
+       SET uid=?,encrypted_token=?,last_reauth_at=COALESCE(?,last_reauth_at),
+           last_error=NULL
+       WHERE chat_id=? AND encrypted_token=?`
+    ).bind(session.uid, encryptedToken, reauthenticatedAt, chatId, account.encrypted_token).run();
+    if (accountUpdate.meta.changes !== 1) {
       throw new Error("VOLP account changed during sync");
     }
-    const existing = await env.DB.prepare(
-      `SELECT assignment_key,title,course,assignment_type,due_at,submitted
-       FROM assignments WHERE chat_id=?`
-    ).bind(chatId).all<any>();
-    const existingByKey = new Map(existing.results.map((item) => [item.assignment_key, item]));
-    const incomingKeys = new Set(assignments.map((item) => item.key));
-    const writes = assignments.flatMap((item) => {
-      const previous = existingByKey.get(item.key);
-      const dueAt = item.dueAt.toISOString();
-      const submitted = item.submitted ? 1 : 0;
-      if (previous &&
-          previous.title === item.title &&
-          previous.course === item.course &&
-          previous.assignment_type === item.type &&
-          previous.due_at === dueAt &&
-          previous.submitted === submitted) {
-        return [];
-      }
-      return [env.DB.prepare(
-        `INSERT INTO assignments(chat_id,assignment_key,title,course,assignment_type,due_at,submitted,updated_at)
-         VALUES(?,?,?,?,?,?,?,?)
-         ON CONFLICT(chat_id,assignment_key) DO UPDATE SET
-         title=excluded.title,course=excluded.course,assignment_type=excluded.assignment_type,
-         due_at=excluded.due_at,submitted=excluded.submitted,updated_at=excluded.updated_at`
-      ).bind(chatId, item.key, item.title, item.course, item.type, dueAt, submitted, now)];
+    return result;
+  } catch (error) {
+    const message = error instanceof Error ? error.message.slice(0, 200) : "Sync failed";
+    await env.DB.prepare(
+      "UPDATE volp_accounts SET last_error=? WHERE chat_id=? AND encrypted_token=?"
+    ).bind(message, chatId, account.encrypted_token).run();
+    throw error;
+  }
+}
+
+async function enqueueSyncStep(
+  env: Env,
+  job: Pick<SyncCourseJob, "chatId" | "runId" | "manual" | "initial" | "enqueuedAt">,
+  position: number,
+  courseCount: number
+) {
+  if (position < courseCount) {
+    await env.SYNC_QUEUE.send({ ...job, kind: "sync-course", position });
+    return;
+  }
+  await env.SYNC_QUEUE.send({ ...job, kind: "sync-finalize" });
+}
+
+async function startChunkedSync(env: Env, job: SyncRequestJob, force = false) {
+  if (!(await acquireSyncLock(env, job.chatId))) {
+    throw new Error("VOLP sync already in progress");
+  }
+  try {
+    const account = await env.DB.prepare(
+      "SELECT last_sync_at FROM volp_accounts WHERE chat_id=?"
+    ).bind(job.chatId).first<{ last_sync_at: string | null }>();
+    if (!account) throw new Error("VOLP account is not connected");
+    const lastSync = account.last_sync_at ? new Date(account.last_sync_at).getTime() : 0;
+    if (!force && Date.now() - lastSync < SYNC_INTERVAL_MS - SYNC_DISPATCH_GRACE_MS) return false;
+
+    const courses = await withAccountSession(env, job.chatId, fetchCourseList);
+    const runId = crypto.randomUUID();
+    const startedAt = new Date().toISOString();
+    const enqueuedAt = job.enqueuedAt ?? startedAt;
+    const statements = [
+      env.DB.prepare("DELETE FROM sync_runs WHERE chat_id=?").bind(job.chatId),
+      env.DB.prepare(
+        `INSERT INTO sync_runs(
+           run_id,chat_id,enqueued_at,started_at,status,course_count,manual,initial
+         ) VALUES(?,?,?,?,'running',?,?,?)`
+      ).bind(
+        runId,
+        job.chatId,
+        enqueuedAt,
+        startedAt,
+        courses.length,
+        job.manual ? 1 : 0,
+        job.initial ? 1 : 0
+      ),
+      ...courses.map((course, position) => env.DB.prepare(
+        `INSERT INTO sync_run_courses(run_id,position,course_json,status)
+         VALUES(?,?,?,'pending')`
+      ).bind(runId, position, JSON.stringify(course)))
+    ];
+    await env.DB.batch(statements);
+    await enqueueSyncStep(
+      env,
+      { chatId: job.chatId, runId, manual: job.manual, initial: job.initial, enqueuedAt },
+      0,
+      courses.length
+    );
+    return true;
+  } finally {
+    await releaseSyncLock(env, job.chatId);
+  }
+}
+
+async function processSyncCourseJob(env: Env, job: SyncCourseJob) {
+  const run = await env.DB.prepare(
+    "SELECT status,course_count FROM sync_runs WHERE run_id=? AND chat_id=?"
+  ).bind(job.runId, job.chatId).first<{ status: string; course_count: number }>();
+  if (!run || run.status !== "running") return;
+  const courseRow = await env.DB.prepare(
+    "SELECT course_json,status FROM sync_run_courses WHERE run_id=? AND position=?"
+  ).bind(job.runId, job.position).first<{ course_json: string; status: string }>();
+  if (!courseRow) {
+    await enqueueSyncStep(env, job, run.course_count, run.course_count);
+    return;
+  }
+  if (courseRow.status !== "done") {
+    const course = JSON.parse(courseRow.course_json);
+    const assignments = await withAccountSession(
+      env,
+      job.chatId,
+      (session) => fetchCourseAssignments(course, session)
+    );
+    const writes = assignments.map((assignment) => env.DB.prepare(
+      `INSERT INTO sync_run_assignments(
+         run_id,assignment_key,title,course,assignment_type,due_at,submitted
+       ) VALUES(?,?,?,?,?,?,?)
+       ON CONFLICT(run_id,assignment_key) DO UPDATE SET
+       title=excluded.title,course=excluded.course,assignment_type=excluded.assignment_type,
+       due_at=excluded.due_at,submitted=excluded.submitted`
+    ).bind(
+      job.runId,
+      assignment.key,
+      assignment.title,
+      assignment.course,
+      assignment.type,
+      assignment.dueAt.toISOString(),
+      assignment.submitted ? 1 : 0
+    ));
+    writes.push(env.DB.prepare(
+      "UPDATE sync_run_courses SET status='done' WHERE run_id=? AND position=?"
+    ).bind(job.runId, job.position));
+    await env.DB.batch(writes);
+  }
+  await enqueueSyncStep(env, job, job.position + 1, run.course_count);
+}
+
+async function notifyCompletedSyncRun(
+  env: Env,
+  run: { run_id: string; chat_id: number; manual: number; initial: number; completion_notified_at: string | null }
+) {
+  if (run.completion_notified_at) return;
+  if (run.manual || run.initial) {
+    await markCurrentAssignmentsSeen(env, run.chat_id);
+    await env.SYNC_QUEUE.send({
+      kind: "sync-result",
+      chatId: run.chat_id,
+      initial: run.initial === 1
     });
-    for (const previous of existing.results) {
-      if (!incomingKeys.has(previous.assignment_key)) {
-        const missed =
-          !previous.submitted &&
-          new Date(previous.due_at).getTime() <= Date.now();
-        if (!missed) {
-          writes.push(
-            env.DB.prepare("DELETE FROM assignments WHERE chat_id=? AND assignment_key=?")
-              .bind(chatId, previous.assignment_key)
-          );
-        }
+  } else {
+    await sendNewAssignmentNotifications(env, run.chat_id);
+  }
+  await env.DB.prepare(
+    "UPDATE sync_runs SET completion_notified_at=? WHERE run_id=? AND completion_notified_at IS NULL"
+  ).bind(new Date().toISOString(), run.run_id).run();
+}
+
+async function processSyncFinalizeJob(env: Env, job: SyncFinalizeJob) {
+  const run = await env.DB.prepare(
+    `SELECT run_id,chat_id,enqueued_at,status,course_count,manual,initial,completion_notified_at
+     FROM sync_runs WHERE run_id=? AND chat_id=?`
+  ).bind(job.runId, job.chatId).first<any>();
+  if (!run) return;
+  if (run.status === "completed") {
+    await notifyCompletedSyncRun(env, run);
+    return;
+  }
+  if (run.status !== "running") return;
+  const unfinished = await env.DB.prepare(
+    "SELECT COUNT(*) AS count FROM sync_run_courses WHERE run_id=? AND status<>'done'"
+  ).bind(job.runId).first<{ count: number }>();
+  if ((unfinished?.count ?? 0) > 0) throw new Error("VOLP sync already in progress");
+
+  const account = await env.DB.prepare(
+    "SELECT sync_enqueued_at FROM volp_accounts WHERE chat_id=?"
+  ).bind(job.chatId).first<{ sync_enqueued_at: string | null }>();
+  if (!account || account.sync_enqueued_at !== run.enqueued_at) {
+    await env.DB.prepare(
+      "UPDATE sync_runs SET status='cancelled',completed_at=? WHERE run_id=?"
+    ).bind(new Date().toISOString(), job.runId).run();
+    return;
+  }
+
+  const staged = await env.DB.prepare(
+    `SELECT assignment_key,title,course,assignment_type,due_at,submitted
+     FROM sync_run_assignments WHERE run_id=?`
+  ).bind(job.runId).all<any>();
+  const existing = await env.DB.prepare(
+    `SELECT assignment_key,title,course,assignment_type,due_at,submitted
+     FROM assignments WHERE chat_id=?`
+  ).bind(job.chatId).all<any>();
+  const existingByKey = new Map(existing.results.map((item) => [item.assignment_key, item]));
+  const incomingKeys = new Set(staged.results.map((item) => item.assignment_key));
+  const now = new Date().toISOString();
+  const writes = staged.results.flatMap((item) => {
+    const previous = existingByKey.get(item.assignment_key) as any;
+    if (previous &&
+        previous.title === item.title &&
+        previous.course === item.course &&
+        previous.assignment_type === item.assignment_type &&
+        previous.due_at === item.due_at &&
+        previous.submitted === item.submitted) {
+      return [];
+    }
+    return [env.DB.prepare(
+      `INSERT INTO assignments(chat_id,assignment_key,title,course,assignment_type,due_at,submitted,updated_at)
+       VALUES(?,?,?,?,?,?,?,?)
+       ON CONFLICT(chat_id,assignment_key) DO UPDATE SET
+       title=excluded.title,course=excluded.course,assignment_type=excluded.assignment_type,
+       due_at=excluded.due_at,submitted=excluded.submitted,updated_at=excluded.updated_at`
+    ).bind(
+      job.chatId,
+      item.assignment_key,
+      item.title,
+      item.course,
+      item.assignment_type,
+      item.due_at,
+      item.submitted,
+      now
+    )];
+  });
+  for (const previous of existing.results) {
+    if (!incomingKeys.has(previous.assignment_key)) {
+      const missed = !previous.submitted && new Date(previous.due_at).getTime() <= Date.now();
+      if (!missed) {
+        writes.push(
+          env.DB.prepare("DELETE FROM assignments WHERE chat_id=? AND assignment_key=?")
+            .bind(job.chatId, previous.assignment_key)
+        );
       }
     }
-    if (writes.length) await env.DB.batch(writes);
-    await env.DB.prepare(
+  }
+  writes.push(
+    env.DB.prepare(
       `DELETE FROM assignments
        WHERE rowid IN (
          SELECT rowid FROM (
@@ -1022,47 +1224,36 @@ async function syncUser(env: Env, chatId: number) {
          )
          WHERE duplicate_number > 1
        )`
-    ).bind(chatId).run();
-    await env.DB.prepare(
+    ).bind(job.chatId),
+    env.DB.prepare(
       `DELETE FROM sent_notifications
-       WHERE chat_id=?
-         AND NOT EXISTS (
-           SELECT 1 FROM assignments a
-           WHERE a.chat_id=sent_notifications.chat_id
-             AND a.assignment_key=sent_notifications.assignment_key
+       WHERE chat_id=? AND NOT EXISTS(
+         SELECT 1 FROM assignments a
+         WHERE a.chat_id=sent_notifications.chat_id
+           AND a.assignment_key=sent_notifications.assignment_key
        )`
-    ).bind(chatId).run();
-    await env.DB.prepare(
+    ).bind(job.chatId),
+    env.DB.prepare(
       `DELETE FROM new_assignment_notifications
-       WHERE chat_id=?
-         AND NOT EXISTS (
-           SELECT 1 FROM assignments a
-           WHERE a.chat_id=new_assignment_notifications.chat_id
-             AND a.assignment_key=new_assignment_notifications.assignment_key
-         )`
-    ).bind(chatId).run();
-    const encryptedToken = session.token === originalToken
-      ? account.encrypted_token
-      : await encryptSecret(session.token, env.CREDENTIAL_KEY);
-    const accountUpdate = await env.DB.prepare(
+       WHERE chat_id=? AND NOT EXISTS(
+         SELECT 1 FROM assignments a
+         WHERE a.chat_id=new_assignment_notifications.chat_id
+           AND a.assignment_key=new_assignment_notifications.assignment_key
+       )`
+    ).bind(job.chatId),
+    env.DB.prepare(
       `UPDATE volp_accounts
-       SET uid=?,encrypted_token=?,last_reauth_at=COALESCE(?,last_reauth_at),
-           last_sync_at=?,last_error=NULL
-       WHERE chat_id=? AND encrypted_token=?`
-    ).bind(session.uid, encryptedToken, reauthenticatedAt, now, chatId, account.encrypted_token).run();
-    if (accountUpdate.meta.changes !== 1) {
-      await env.DB.prepare(
-        "DELETE FROM assignments WHERE chat_id=? AND updated_at=?"
-      ).bind(chatId, now).run();
-      throw new Error("VOLP account changed during sync");
-    }
-  } catch (error) {
-    const message = error instanceof Error ? error.message.slice(0, 200) : "Sync failed";
-    await env.DB.prepare(
-      "UPDATE volp_accounts SET last_error=? WHERE chat_id=? AND encrypted_token=?"
-    ).bind(message, chatId, account.encrypted_token).run();
-    throw error;
-  }
+       SET last_sync_at=?,last_error=NULL,sync_enqueued_at=NULL
+       WHERE chat_id=? AND sync_enqueued_at=?`
+    ).bind(now, job.chatId, run.enqueued_at),
+    env.DB.prepare(
+      "UPDATE sync_runs SET status='completed',completed_at=? WHERE run_id=? AND status='running'"
+    ).bind(now, job.runId)
+  );
+  const results = await env.DB.batch(writes);
+  const accountResult = results[results.length - 2];
+  if (accountResult.meta.changes !== 1) throw new Error("VOLP account changed during sync");
+  await notifyCompletedSyncRun(env, { ...run, status: "completed" });
 }
 
 async function sendDueReminders(env: Env, chatId: number, threshold: number) {
@@ -1098,7 +1289,7 @@ async function processScheduledAccount(env: Env, account: ScheduledAccount) {
     const requiresManualReconnect =
       account.last_error?.includes("session expired") && !account.auto_relogin;
     if (syncIsDue && !requiresManualReconnect) {
-      await syncUser(env, account.chat_id);
+      return;
     }
     await sendDueReminders(env, account.chat_id, account.reminder_minutes);
   } catch (error) {
@@ -1177,6 +1368,7 @@ async function runScheduled(env: Env) {
     env.DB.prepare("DELETE FROM setup_tokens WHERE expires_at < ?").bind(now),
     env.DB.prepare("DELETE FROM sync_locks WHERE expires_at < ?").bind(now),
     env.DB.prepare("DELETE FROM telegram_updates WHERE received_at < ?").bind(updateCutoff),
+    env.DB.prepare("DELETE FROM sync_runs WHERE status<>'running' AND completed_at < ?").bind(updateCutoff),
     env.DB.prepare("DELETE FROM daily_digest_log WHERE digest_date < ?").bind(digestCutoff),
     env.DB.prepare("DELETE FROM assignments WHERE due_at < ? AND submitted=1").bind(now),
     env.DB.prepare(
@@ -1196,23 +1388,6 @@ async function runScheduled(env: Env) {
        )`
     )
   ]);
-}
-
-async function processSyncJob(env: Env, chatId: number, force = false) {
-  if (!(await acquireSyncLock(env, chatId))) {
-    throw new Error("VOLP sync already in progress");
-  }
-  try {
-    const account = await env.DB.prepare(
-      "SELECT last_sync_at,last_error,auto_relogin FROM volp_accounts WHERE chat_id=?"
-    ).bind(chatId).first<Pick<ScheduledAccount, "last_sync_at" | "last_error" | "auto_relogin">>();
-    if (!account) throw new Error("VOLP account is not connected");
-    const lastSync = account.last_sync_at ? new Date(account.last_sync_at).getTime() : 0;
-    if (!force && Date.now() - lastSync < SYNC_INTERVAL_MS - SYNC_DISPATCH_GRACE_MS) return;
-    await syncUser(env, chatId);
-  } finally {
-    await releaseSyncLock(env, chatId);
-  }
 }
 
 async function connectGet(env: Env, token: string) {
@@ -1324,7 +1499,8 @@ async function connectSession(request: Request, env: Env) {
         env.DB.prepare("DELETE FROM sent_notifications WHERE chat_id=?").bind(claimedSetup.chat_id),
         env.DB.prepare("DELETE FROM new_assignment_notifications WHERE chat_id=?").bind(claimedSetup.chat_id),
         env.DB.prepare("DELETE FROM daily_digest_log WHERE chat_id=?").bind(claimedSetup.chat_id),
-        env.DB.prepare("DELETE FROM assignments WHERE chat_id=?").bind(claimedSetup.chat_id)
+        env.DB.prepare("DELETE FROM assignments WHERE chat_id=?").bind(claimedSetup.chat_id),
+        env.DB.prepare("DELETE FROM sync_runs WHERE chat_id=?").bind(claimedSetup.chat_id)
       );
     }
     for (const duplicateAccount of duplicateAccounts.results) {
@@ -1333,6 +1509,7 @@ async function connectSession(request: Request, env: Env) {
         env.DB.prepare("DELETE FROM new_assignment_notifications WHERE chat_id=?").bind(duplicateAccount.chat_id),
         env.DB.prepare("DELETE FROM daily_digest_log WHERE chat_id=?").bind(duplicateAccount.chat_id),
         env.DB.prepare("DELETE FROM assignments WHERE chat_id=?").bind(duplicateAccount.chat_id),
+        env.DB.prepare("DELETE FROM sync_runs WHERE chat_id=?").bind(duplicateAccount.chat_id),
         env.DB.prepare("DELETE FROM volp_accounts WHERE chat_id=?").bind(duplicateAccount.chat_id),
         env.DB.prepare("DELETE FROM setup_tokens WHERE chat_id=?").bind(duplicateAccount.chat_id),
         env.DB.prepare("DELETE FROM sync_locks WHERE chat_id=?").bind(duplicateAccount.chat_id)
@@ -1490,6 +1667,62 @@ export default {
         }
         continue;
       }
+      if (message.body.kind === "sync-course" || message.body.kind === "sync-finalize") {
+        try {
+          if (message.body.kind === "sync-course") {
+            await processSyncCourseJob(env, message.body);
+          } else {
+            await processSyncFinalizeJob(env, message.body);
+          }
+          message.ack();
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : "";
+          const coolingDown = detail.includes("automatic re-login is cooling down");
+          if (coolingDown) {
+            const account = await env.DB.prepare(
+              "SELECT last_reauth_at FROM volp_accounts WHERE chat_id=?"
+            ).bind(message.body.chatId).first<{ last_reauth_at: string | null }>();
+            const retryAt = account?.last_reauth_at
+              ? new Date(account.last_reauth_at).getTime() + 15 * 60_000
+              : Date.now() + 60_000;
+            const retryDelaySeconds = Math.max(
+              60,
+              Math.min(15 * 60, Math.ceil((retryAt - Date.now()) / 1000) + 5)
+            );
+            message.retry({ delaySeconds: retryDelaySeconds });
+            continue;
+          }
+          const permanent =
+            detail.includes("session expired") ||
+            detail.includes("automatic re-login failed") ||
+            detail.includes("VOLP account is not connected") ||
+            detail.includes("VOLP account changed during sync");
+          const exhausted = message.attempts >= 3;
+          if (permanent || exhausted) {
+            await env.DB.prepare(
+              "UPDATE sync_runs SET status='failed',completed_at=? WHERE run_id=? AND status='running'"
+            ).bind(new Date().toISOString(), message.body.runId).run();
+            await clearSyncEnqueued(env, message.body);
+            message.ack();
+            if (message.body.manual || message.body.initial) {
+              try {
+                await send(
+                  env,
+                  message.body.chatId,
+                  permanent
+                    ? "âš ï¸ Your VOLP session is no longer valid. Use /connect to reconnect."
+                    : "âš ï¸ VOLP did not finish syncing after several attempts. Please try /sync again later."
+                );
+              } catch {
+                // The user may have blocked the bot.
+              }
+            }
+          } else {
+            message.retry({ delaySeconds: detail.includes("already in progress") ? 60 : 300 });
+          }
+        }
+        continue;
+      }
       if (isVolpMaintenanceWindow()) {
         if (message.body.initial) {
           try {
@@ -1521,33 +1754,8 @@ export default {
       }
       try {
         const userRequestedResult = message.body.manual === true || message.body.initial === true;
-        await processSyncJob(env, message.body.chatId, userRequestedResult);
-        if (userRequestedResult) {
-          await markCurrentAssignmentsSeen(env, message.body.chatId);
-        } else {
-          await sendNewAssignmentNotifications(env, message.body.chatId);
-        }
-        await clearSyncEnqueued(env, message.body);
-        if (userRequestedResult) {
-          try {
-            await env.SYNC_QUEUE.send({
-              kind: "sync-result",
-              chatId: message.body.chatId,
-              initial: message.body.initial === true
-            });
-          } catch (error) {
-            const detail = error instanceof Error ? error.message : "unknown error";
-            console.error("Could not enqueue sync result", detail);
-            try {
-              await deliverSyncResult(env, message.body.chatId, message.body.initial === true);
-            } catch (deliveryError) {
-              console.error(
-                "Sync result fallback delivery failed",
-                deliveryError instanceof Error ? deliveryError.message : "unknown error"
-              );
-            }
-          }
-        }
+        const started = await startChunkedSync(env, message.body, userRequestedResult);
+        if (!started) await clearSyncEnqueued(env, message.body);
         message.ack();
       } catch (error) {
         const detail = error instanceof Error ? error.message : "";
