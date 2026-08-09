@@ -70,11 +70,12 @@ const MAX_CONNECTED_ACCOUNTS = 90;
 const REPOSITORY_URL = "https://github.com/nemesis0007/volp-telegram-reminder-bot";
 const REPOSITORY_FORK_URL = `${REPOSITORY_URL}/fork`;
 const SELF_HOSTING_GUIDE_URL = `${REPOSITORY_URL}/blob/main/SELF_HOSTING.md`;
-const BOT_VERSION = "1.3.4";
+const BOT_VERSION = "1.3.5";
 const TELEMETRY_ORIGIN = "https://volp-telegram-reminder-bot.nirajbots.workers.dev";
 const TELEMETRY_ENDPOINT = `${TELEMETRY_ORIGIN}/telemetry/v1`;
 const TELEMETRY_INTERVAL_MS = 24 * 60 * 60_000;
 const MAX_TELEMETRY_INSTALLATIONS = 10_000;
+const MISSED_ASSIGNMENT_RETENTION_MS = 45 * 24 * 60 * 60_000;
 const VOLP_MAINTENANCE_END_MINUTE_IST = 6 * 60 + 30;
 const VOLP_MAINTENANCE_MESSAGE =
   "🌙 VOLP is unavailable for scheduled maintenance from 12:00 AM to 6:30 AM. I’ll sync automatically after 6:30 AM.";
@@ -833,7 +834,7 @@ function collectHandsOn(
 ) {
   for (const item of items) {
     const dueAt = parseDueDate(item.duedate);
-    if (!dueAt || dueAt.getTime() <= Date.now()) continue;
+    if (!dueAt || dueAt.getTime() < Date.now() - MISSED_ASSIGNMENT_RETENTION_MS) continue;
     const title = stripHtml(item.assignment_text) || "Hands-on assignment";
     found.push({
       key: `hands:${fallbackId}:${item.ass_id ?? item.id ?? title.slice(0, 80)}`,
@@ -904,7 +905,7 @@ async function fetchCourseAssignments(course: any, session: VolpSession): Promis
     );
     for (const item of subjective.question_list ?? []) {
       const dueAt = parseDueDate(item.due_date);
-      if (!dueAt || dueAt.getTime() <= Date.now()) continue;
+      if (!dueAt || dueAt.getTime() < Date.now() - MISSED_ASSIGNMENT_RETENTION_MS) continue;
       found.push({
         key: `subjective:${courseId}:${item.question_id ?? item.id ?? stripHtml(item.question).slice(0, 80)}`,
         title: stripHtml(item.question) || "Subjective assignment",
@@ -1200,7 +1201,11 @@ async function processSyncFinalizeJob(env: Env, job: SyncFinalizeJob) {
   });
   for (const previous of existing.results) {
     if (!incomingKeys.has(previous.assignment_key)) {
-      const missed = !previous.submitted && new Date(previous.due_at).getTime() <= Date.now();
+      const previousDue = new Date(previous.due_at).getTime();
+      const missed =
+        !previous.submitted &&
+        previousDue <= Date.now() &&
+        previousDue >= Date.now() - MISSED_ASSIGNMENT_RETENTION_MS;
       if (!missed) {
         writes.push(
           env.DB.prepare("DELETE FROM assignments WHERE chat_id=? AND assignment_key=?")
@@ -1364,12 +1369,14 @@ async function runScheduled(env: Env) {
   const now = new Date().toISOString();
   const updateCutoff = new Date(Date.now() - 7 * 24 * 60 * 60_000).toISOString();
   const digestCutoff = new Date(Date.now() - 45 * 24 * 60 * 60_000).toISOString().slice(0, 10);
+  const assignmentCutoff = new Date(Date.now() - MISSED_ASSIGNMENT_RETENTION_MS).toISOString();
   await env.DB.batch([
     env.DB.prepare("DELETE FROM setup_tokens WHERE expires_at < ?").bind(now),
     env.DB.prepare("DELETE FROM sync_locks WHERE expires_at < ?").bind(now),
     env.DB.prepare("DELETE FROM telegram_updates WHERE received_at < ?").bind(updateCutoff),
     env.DB.prepare("DELETE FROM sync_runs WHERE status<>'running' AND completed_at < ?").bind(updateCutoff),
     env.DB.prepare("DELETE FROM daily_digest_log WHERE digest_date < ?").bind(digestCutoff),
+    env.DB.prepare("DELETE FROM assignments WHERE due_at < ?").bind(assignmentCutoff),
     env.DB.prepare("DELETE FROM assignments WHERE due_at < ? AND submitted=1").bind(now),
     env.DB.prepare(
       `DELETE FROM sent_notifications
