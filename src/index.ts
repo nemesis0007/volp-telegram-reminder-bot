@@ -67,9 +67,7 @@ const SYNC_INTERVAL_MS = 3 * 60 * 60_000;
 const SYNC_DISPATCH_GRACE_MS = 5 * 60_000;
 const MAX_CONNECTED_ACCOUNTS = 90;
 const REPOSITORY_URL = "https://github.com/nemesis0007/volp-telegram-reminder-bot";
-const REPOSITORY_FORK_URL = `${REPOSITORY_URL}/fork`;
-const SELF_HOSTING_GUIDE_URL = `${REPOSITORY_URL}/blob/main/SELF_HOSTING.md`;
-const BOT_VERSION = "1.4.3";
+const BOT_VERSION = "1.4.4";
 const TELEMETRY_ORIGIN = "https://volp-telegram-reminder-bot.nirajbots.workers.dev";
 const TELEMETRY_ENDPOINT = `${TELEMETRY_ORIGIN}/telemetry/v1`;
 const TELEMETRY_INTERVAL_MS = 24 * 60 * 60_000;
@@ -361,8 +359,6 @@ async function configureTelegram(env: Env, origin: string) {
         { command: "missed", description: "View missed assignments" },
         { command: "sync", description: "Check VOLP now" },
         { command: "settings", description: "Choose reminder timing" },
-        { command: "security", description: "View automatic login status" },
-        { command: "selfhost", description: "Deploy your own private bot" },
         { command: "about", description: "About this bot and its privacy" },
         { command: "disconnect", description: "Delete your VOLP connection and data" }
       ]
@@ -426,27 +422,6 @@ function reminderKeyboard(current?: number) {
   };
 }
 
-function selfHostingKeyboard() {
-  return {
-    inline_keyboard: [
-      [{ text: "Fork on GitHub 🍴", url: REPOSITORY_FORK_URL }],
-      [
-        { text: "Setup guide 📖", url: SELF_HOSTING_GUIDE_URL },
-        { text: "Source code", url: REPOSITORY_URL }
-      ]
-    ]
-  };
-}
-
-async function showSelfHosting(env: Env, chatId: number) {
-  return send(
-    env,
-    chatId,
-    "🍴 <b>Fork and self-host your own private bot</b>\n\n1. Create a Telegram bot with @BotFather and copy its token.\n2. Tap <b>Fork on GitHub</b> below and create the fork in your account.\n3. Clone your fork, run npm install, and sign in with npx wrangler login.\n4. Create the Cloudflare D1 database and Queue, update wrangler.jsonc with the D1 ID, and add the three Worker secrets.\n5. Run npm run deploy, open the new Worker URL once, and send /start to your Telegram bot.\n\nYour fork uses its own Worker, database, queue, encryption key, and Telegram bot. Follow the detailed guide for the exact commands.",
-    selfHostingKeyboard()
-  );
-}
-
 async function showSettings(env: Env, chatId: number) {
   const user = await env.DB.prepare("SELECT reminder_hours FROM users WHERE chat_id=?").bind(chatId).first<{ reminder_hours: number }>();
   const current = user?.reminder_hours ?? DEFAULT_REMINDER_HOURS;
@@ -486,10 +461,6 @@ async function handleCallback(env: Env, callback: any) {
   if (data === "assignments:view") {
     await telegram(env, "answerCallbackQuery", { callback_query_id: callback.id });
     return sendAssignments(env, chatId);
-  }
-  if (data === "selfhost:show") {
-    await telegram(env, "answerCallbackQuery", { callback_query_id: callback.id });
-    return showSelfHosting(env, chatId);
   }
   const match = data.match(/^reminder_hours:([1-9]|10)$/);
   if (!match) {
@@ -770,8 +741,7 @@ async function handleCommand(env: Env, chatId: number, text: string, origin: str
       return send(
         env,
         chatId,
-        "⛔ <b>Bot capacity reached</b>\n\nNew VOLP connections are temporarily closed to keep reminders reliable. Existing connected users can continue using the bot.\n\nYou can deploy your own private copy on Cloudflare instead.",
-        selfHostingKeyboard()
+        "⛔ <b>Bot capacity reached</b>\n\nNew VOLP connections are temporarily closed to keep reminders reliable. Existing connected users can continue using the bot."
       );
     }
     const link = await makeSetupLink(env, chatId, origin);
@@ -780,8 +750,7 @@ async function handleCommand(env: Env, chatId: number, text: string, origin: str
       {
         inline_keyboard: [
           [{ text: "Connect VOLP 🔐", web_app: { url: link } }],
-          [{ text: "Choose reminder time", callback_data: "reminder_hours:1" }],
-          [{ text: "Self-host your own bot 🚀", callback_data: "selfhost:show" }]
+          [{ text: "Choose reminder time", callback_data: "reminder_hours:1" }]
         ]
       });
   }
@@ -839,22 +808,6 @@ async function handleCommand(env: Env, chatId: number, text: string, origin: str
   if (command === "/settings" || command === "/reminder") {
     return showSettings(env, chatId);
   }
-  if (command === "/security") {
-    const account = await env.DB.prepare(
-      "SELECT auto_relogin,last_reauth_at FROM volp_accounts WHERE chat_id=?"
-    ).bind(chatId).first<{ auto_relogin: number; last_reauth_at: string | null }>();
-    if (!account) return send(env, chatId, "No VOLP account is connected.");
-    const status = account.auto_relogin
-      ? "Enabled — the encrypted password may be used to restore an expired VOLP session."
-      : "Disabled — only the encrypted VOLP session token is stored.";
-    const lastLogin = account.last_reauth_at
-      ? `\nLast automatic login: ${new Date(account.last_reauth_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}`
-      : "";
-    return send(env, chatId, `🔐 <b>Automatic re-login</b>\n\n${status}${lastLogin}`);
-  }
-  if (command === "/selfhost") {
-    return showSelfHosting(env, chatId);
-  }
   if (command === "/about") {
     return send(
       env,
@@ -876,7 +829,7 @@ async function handleCommand(env: Env, chatId: number, text: string, origin: str
       }
     );
   }
-  return send(env, chatId, "Commands: /connect, /assignments, /missed, /sync, /settings, /security, /selfhost, /about, /disconnect");
+  return send(env, chatId, "Commands: /connect, /assignments, /missed, /sync, /settings, /about, /disconnect");
 }
 
 function collectHandsOn(

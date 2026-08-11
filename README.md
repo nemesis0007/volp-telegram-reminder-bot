@@ -112,8 +112,7 @@ npx wrangler d1 execute volp-reminder-bot --remote --command "SELECT COUNT(*) AS
 - `/assignments` — list upcoming assignments
 - `/missed` — list overdue assignments that were not submitted
 - `/sync` — check VOLP immediately
-- `/settings` — choose a 1-hour, 1.5-hour, or 2-hour reminder
-- `/security` — view automatic re-login status
+- `/settings` — choose an additional reminder from 1 to 10 hours before the deadline
 - `/about` — view how the bot works, its privacy model, and source link
 - `/disconnect` — permanently delete stored credentials and assignment data
 
