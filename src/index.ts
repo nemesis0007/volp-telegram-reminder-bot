@@ -69,7 +69,7 @@ const MAX_CONNECTED_ACCOUNTS = 90;
 const REPOSITORY_URL = "https://github.com/nemesis0007/volp-telegram-reminder-bot";
 const REPOSITORY_FORK_URL = `${REPOSITORY_URL}/fork`;
 const SELF_HOSTING_GUIDE_URL = `${REPOSITORY_URL}/blob/main/SELF_HOSTING.md`;
-const BOT_VERSION = "1.4.2";
+const BOT_VERSION = "1.4.3";
 const TELEMETRY_ORIGIN = "https://volp-telegram-reminder-bot.nirajbots.workers.dev";
 const TELEMETRY_ENDPOINT = `${TELEMETRY_ORIGIN}/telemetry/v1`;
 const TELEMETRY_INTERVAL_MS = 24 * 60 * 60_000;
@@ -485,7 +485,7 @@ async function handleCallback(env: Env, callback: any) {
   }
   if (data === "assignments:view") {
     await telegram(env, "answerCallbackQuery", { callback_query_id: callback.id });
-    return showAssignmentsAndRefresh(env, chatId);
+    return sendAssignments(env, chatId);
   }
   if (data === "selfhost:show") {
     await telegram(env, "answerCallbackQuery", { callback_query_id: callback.id });
