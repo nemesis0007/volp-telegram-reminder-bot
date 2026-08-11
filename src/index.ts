@@ -71,7 +71,7 @@ const MAX_CONNECTED_ACCOUNTS = 90;
 const REPOSITORY_URL = "https://github.com/nemesis0007/volp-telegram-reminder-bot";
 const REPOSITORY_FORK_URL = `${REPOSITORY_URL}/fork`;
 const SELF_HOSTING_GUIDE_URL = `${REPOSITORY_URL}/blob/main/SELF_HOSTING.md`;
-const BOT_VERSION = "1.3.12";
+const BOT_VERSION = "1.3.13";
 const TELEMETRY_ORIGIN = "https://volp-telegram-reminder-bot.nirajbots.workers.dev";
 const TELEMETRY_ENDPOINT = `${TELEMETRY_ORIGIN}/telemetry/v1`;
 const TELEMETRY_INTERVAL_MS = 24 * 60 * 60_000;
@@ -771,7 +771,7 @@ async function handleCommand(env: Env, chatId: number, text: string, origin: str
       `👋 <b>VOLP Assignment Reminder</b>\n\nConnect your VOLP account using the private link below. It expires in 15 minutes.\n\nYour VOLP password will be stored encrypted and used only for automatic re-login. Use /disconnect anytime to erase all stored credentials and data.`,
       {
         inline_keyboard: [
-          [{ text: "Connect VOLP 🔐", url: link }],
+          [{ text: "Connect VOLP 🔐", web_app: { url: link } }],
           [{ text: "Choose reminder time", callback_data: "reminder:90" }],
           [{ text: "Self-host your own bot 🚀", callback_data: "selfhost:show" }]
         ]
