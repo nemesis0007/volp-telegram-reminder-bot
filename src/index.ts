@@ -13,6 +13,7 @@ type SyncRequestJob = {
   chatId: number;
   manual?: boolean;
   initial?: boolean;
+  assignmentRefresh?: boolean;
   enqueuedAt?: string;
 };
 
@@ -70,7 +71,7 @@ const MAX_CONNECTED_ACCOUNTS = 90;
 const REPOSITORY_URL = "https://github.com/nemesis0007/volp-telegram-reminder-bot";
 const REPOSITORY_FORK_URL = `${REPOSITORY_URL}/fork`;
 const SELF_HOSTING_GUIDE_URL = `${REPOSITORY_URL}/blob/main/SELF_HOSTING.md`;
-const BOT_VERSION = "1.3.5";
+const BOT_VERSION = "1.3.6";
 const TELEMETRY_ORIGIN = "https://volp-telegram-reminder-bot.nirajbots.workers.dev";
 const TELEMETRY_ENDPOINT = `${TELEMETRY_ORIGIN}/telemetry/v1`;
 const TELEMETRY_INTERVAL_MS = 24 * 60 * 60_000;
@@ -477,7 +478,7 @@ async function handleCallback(env: Env, callback: any) {
   }
   if (data === "assignments:view") {
     await telegram(env, "answerCallbackQuery", { callback_query_id: callback.id });
-    return sendAssignments(env, chatId);
+    return showAssignmentsAndRefresh(env, chatId);
   }
   if (data === "selfhost:show") {
     await telegram(env, "answerCallbackQuery", { callback_query_id: callback.id });
@@ -558,9 +559,49 @@ async function sendAssignments(env: Env, chatId: number) {
     chatId,
     rows.results,
     "📚 <b>Upcoming assignments</b>",
-    "No upcoming assignments found. Use /sync to check VOLP now.",
+    "No saved upcoming assignments found.",
     "Due"
   );
+}
+
+async function showAssignmentsAndRefresh(env: Env, chatId: number) {
+  const account = await env.DB.prepare(
+    "SELECT last_sync_at FROM volp_accounts WHERE chat_id=?"
+  ).bind(chatId).first<{ last_sync_at: string | null }>();
+  if (!account) {
+    return send(env, chatId, "Connect your VOLP account first with /connect.");
+  }
+  if (!account.last_sync_at) {
+    return send(env, chatId, "⏳ Your first VOLP sync is still loading assignments. I’ll send them automatically when it finishes.");
+  }
+
+  // Reply from D1 first so a slow VOLP request never delays the assignments button.
+  await sendAssignments(env, chatId);
+
+  if (isVolpMaintenanceWindow()) {
+    return send(env, chatId, VOLP_MAINTENANCE_MESSAGE);
+  }
+
+  const enqueuedAt = new Date().toISOString();
+  const redispatchBefore = new Date(Date.now() - 30 * 60_000).toISOString();
+  const queued = await env.DB.prepare(
+    `UPDATE volp_accounts SET sync_enqueued_at=?
+     WHERE chat_id=?
+       AND (sync_enqueued_at IS NULL OR sync_enqueued_at<?)`
+  ).bind(enqueuedAt, chatId, redispatchBefore).run();
+  if (queued.meta.changes !== 1) {
+    return send(env, chatId, "⏳ I’m already checking VOLP for new assignments.");
+  }
+
+  try {
+    await env.SYNC_QUEUE.send({ chatId, assignmentRefresh: true, enqueuedAt });
+  } catch {
+    await env.DB.prepare(
+      "UPDATE volp_accounts SET sync_enqueued_at=NULL WHERE chat_id=? AND sync_enqueued_at=?"
+    ).bind(chatId, enqueuedAt).run();
+    return send(env, chatId, "⚠️ I couldn’t queue the VOLP refresh. Your saved assignments are still available; please try again later.");
+  }
+  return send(env, chatId, "🔄 Checking VOLP for new assignments in the background.");
 }
 
 async function deliverSyncResult(env: Env, chatId: number, initial = false) {
@@ -727,13 +768,7 @@ async function handleCommand(env: Env, chatId: number, text: string, origin: str
       });
   }
   if (command === "/assignments") {
-    const account = await env.DB.prepare(
-      "SELECT last_sync_at FROM volp_accounts WHERE chat_id=?"
-    ).bind(chatId).first<{ last_sync_at: string | null }>();
-    if (account && !account.last_sync_at) {
-      return send(env, chatId, "⏳ Your first VOLP sync is still loading assignments. I’ll send them automatically when it finishes.");
-    }
-    return sendAssignments(env, chatId);
+    return showAssignmentsAndRefresh(env, chatId);
   }
   if (command === "/missed") {
     const account = await env.DB.prepare(
@@ -1761,7 +1796,8 @@ export default {
       }
       try {
         const userRequestedResult = message.body.manual === true || message.body.initial === true;
-        const started = await startChunkedSync(env, message.body, userRequestedResult);
+        const forceSync = userRequestedResult || message.body.assignmentRefresh === true;
+        const started = await startChunkedSync(env, message.body, forceSync);
         if (!started) await clearSyncEnqueued(env, message.body);
         message.ack();
       } catch (error) {
@@ -1778,7 +1814,7 @@ export default {
             60,
             Math.min(15 * 60, Math.ceil((retryAt - Date.now()) / 1000) + 5)
           );
-          if ((message.body.manual || message.body.initial) && message.attempts === 1) {
+          if ((message.body.manual || message.body.initial || message.body.assignmentRefresh) && message.attempts === 1) {
             try {
               await send(
                 env,
@@ -1800,7 +1836,7 @@ export default {
         if (permanent || exhausted) {
           await clearSyncEnqueued(env, message.body);
           message.ack();
-          if (message.body.manual || message.body.initial) {
+          if (message.body.manual || message.body.initial || message.body.assignmentRefresh) {
             try {
               await send(
                 env,
