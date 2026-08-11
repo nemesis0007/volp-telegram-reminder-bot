@@ -69,7 +69,7 @@ const MAX_CONNECTED_ACCOUNTS = 90;
 const REPOSITORY_URL = "https://github.com/nemesis0007/volp-telegram-reminder-bot";
 const REPOSITORY_FORK_URL = `${REPOSITORY_URL}/fork`;
 const SELF_HOSTING_GUIDE_URL = `${REPOSITORY_URL}/blob/main/SELF_HOSTING.md`;
-const BOT_VERSION = "1.4.0";
+const BOT_VERSION = "1.4.1";
 const TELEMETRY_ORIGIN = "https://volp-telegram-reminder-bot.nirajbots.workers.dev";
 const TELEMETRY_ENDPOINT = `${TELEMETRY_ORIGIN}/telemetry/v1`;
 const TELEMETRY_INTERVAL_MS = 24 * 60 * 60_000;
@@ -1654,7 +1654,7 @@ async function connectSession(request: Request, env: Env) {
       claimedSetup.chat_id,
       `${accountChanged ? "🔄 VOLP account switched." : "✅ VOLP connected."} Automatic re-login is enabled with encrypted password storage.\n\n${initialSyncQueued
         ? "I’ve queued your first assignment sync and will message you when it finishes. After that, I’ll check every 3 hours."
-        : "I couldn’t queue your first assignment sync. Please send /sync in Telegram."}`,
+        : "I couldn’t queue your first assignment sync. Please send /sync in Telegram."}\n\n⏰ <b>Choose an additional reminder time below</b> (1–10 hours before the deadline). Everyone also receives the standard 1-hour reminder. Choosing 1h sends only one alert.`,
       reminderKeyboard(DEFAULT_REMINDER_HOURS)
     );
     return json({ ok: true });
