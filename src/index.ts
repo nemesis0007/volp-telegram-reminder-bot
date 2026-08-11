@@ -53,8 +53,6 @@ type Assignment = {
   dueAt: Date;
   submitted: boolean;
 };
-type ReminderMinutes = 60 | 90 | 120;
-
 const BASE_HEADERS: Record<string, string> = {
   Accept: "application/json, text/plain, */*",
   "Content-Type": "application/json;charset=utf-8",
@@ -63,15 +61,15 @@ const BASE_HEADERS: Record<string, string> = {
   Origin: "https://classroom.volp.in",
   Referer: "https://classroom.volp.in/"
 };
-const DEFAULT_REMINDER_MINUTES: ReminderMinutes = 90;
-const REMINDER_OPTIONS: ReminderMinutes[] = [60, 90, 120];
+const DEFAULT_REMINDER_HOURS = 1;
+const REMINDER_HOUR_OPTIONS = Array.from({ length: 10 }, (_, index) => index + 1);
 const SYNC_INTERVAL_MS = 3 * 60 * 60_000;
 const SYNC_DISPATCH_GRACE_MS = 5 * 60_000;
 const MAX_CONNECTED_ACCOUNTS = 90;
 const REPOSITORY_URL = "https://github.com/nemesis0007/volp-telegram-reminder-bot";
 const REPOSITORY_FORK_URL = `${REPOSITORY_URL}/fork`;
 const SELF_HOSTING_GUIDE_URL = `${REPOSITORY_URL}/blob/main/SELF_HOSTING.md`;
-const BOT_VERSION = "1.3.20";
+const BOT_VERSION = "1.4.0";
 const TELEMETRY_ORIGIN = "https://volp-telegram-reminder-bot.nirajbots.workers.dev";
 const TELEMETRY_ENDPOINT = `${TELEMETRY_ORIGIN}/telemetry/v1`;
 const TELEMETRY_INTERVAL_MS = 24 * 60 * 60_000;
@@ -419,12 +417,12 @@ async function hasConnectionCapacity(env: Env, chatId: number) {
 
 function reminderKeyboard(current?: number) {
   return {
-    inline_keyboard: [
-      REMINDER_OPTIONS.map((minutes) => ({
-        text: `${minutes === 90 ? "1.5" : minutes / 60} hour${minutes === 60 ? "" : "s"}${current === minutes ? " ✓" : ""}`,
-        callback_data: `reminder:${minutes}`
+    inline_keyboard: [0, 5].map((start) =>
+      REMINDER_HOUR_OPTIONS.slice(start, start + 5).map((hours) => ({
+        text: `${hours}h${current === hours ? " ✓" : ""}`,
+        callback_data: `reminder_hours:${hours}`
       }))
-    ]
+    )
   };
 }
 
@@ -450,12 +448,12 @@ async function showSelfHosting(env: Env, chatId: number) {
 }
 
 async function showSettings(env: Env, chatId: number) {
-  const user = await env.DB.prepare("SELECT reminder_minutes FROM users WHERE chat_id=?").bind(chatId).first<{ reminder_minutes: number }>();
-  const current = user?.reminder_minutes ?? DEFAULT_REMINDER_MINUTES;
+  const user = await env.DB.prepare("SELECT reminder_hours FROM users WHERE chat_id=?").bind(chatId).first<{ reminder_hours: number }>();
+  const current = user?.reminder_hours ?? DEFAULT_REMINDER_HOURS;
   return send(
     env,
     chatId,
-    `⚙️ <b>Reminder timing</b>\n\nCurrent setting: <b>${current === 90 ? "1.5" : current / 60} hour${current === 60 ? "" : "s"} before the deadline</b>.\n\nChoose when you want your reminder:`,
+    `⚙️ <b>Reminder timing</b>\n\nEveryone receives a reminder <b>1 hour before the deadline</b>.\n\nYour selected reminder: <b>${current} hour${current === 1 ? "" : "s"} before</b>.${current === 1 ? " This is combined with the standard 1-hour reminder, so you receive it only once." : ""}\n\nChoose any time from 1 to 10 hours:`,
     reminderKeyboard(current)
   );
 }
@@ -493,18 +491,25 @@ async function handleCallback(env: Env, callback: any) {
     await telegram(env, "answerCallbackQuery", { callback_query_id: callback.id });
     return showSelfHosting(env, chatId);
   }
-  const match = data.match(/^reminder:(60|90|120)$/);
+  const match = data.match(/^reminder_hours:([1-9]|10)$/);
   if (!match) {
+    if (/^reminder:(60|90|120)$/.test(data)) {
+      await telegram(env, "answerCallbackQuery", {
+        callback_query_id: callback.id,
+        text: "Reminder options changed. Choose a new time below."
+      });
+      return showSettings(env, chatId);
+    }
     return telegram(env, "answerCallbackQuery", { callback_query_id: callback.id });
   }
-  const minutes = Number(match[1]) as ReminderMinutes;
+  const hours = Number(match[1]);
   await env.DB.prepare(
-    `INSERT INTO users(chat_id,created_at,reminder_minutes) VALUES(?,?,?)
-     ON CONFLICT(chat_id) DO UPDATE SET reminder_minutes=excluded.reminder_minutes`
-  ).bind(chatId, new Date().toISOString(), minutes).run();
+    `INSERT INTO users(chat_id,created_at,reminder_hours) VALUES(?,?,?)
+     ON CONFLICT(chat_id) DO UPDATE SET reminder_hours=excluded.reminder_hours`
+  ).bind(chatId, new Date().toISOString(), hours).run();
   await telegram(env, "answerCallbackQuery", {
     callback_query_id: callback.id,
-    text: `Reminder set to ${minutes === 90 ? "1.5" : minutes / 60} hour${minutes === 60 ? "" : "s"} before`
+    text: `${hours === 1 ? "Reminder" : "Additional reminder"} set to ${hours} hour${hours === 1 ? "" : "s"} before`
   });
   return showSettings(env, chatId);
 }
@@ -756,7 +761,7 @@ async function handleCommand(env: Env, chatId: number, text: string, origin: str
     if (command === "/start") await configureTelegram(env, origin);
     await env.DB.prepare(
       "INSERT OR IGNORE INTO users(chat_id,created_at,reminder_minutes) VALUES(?,?,?)"
-    ).bind(chatId, new Date().toISOString(), DEFAULT_REMINDER_MINUTES).run();
+    ).bind(chatId, new Date().toISOString(), 60).run();
     if (!(await hasConnectionCapacity(env, chatId))) {
       return send(
         env,
@@ -771,7 +776,7 @@ async function handleCommand(env: Env, chatId: number, text: string, origin: str
       {
         inline_keyboard: [
           [{ text: "Connect VOLP 🔐", web_app: { url: link } }],
-          [{ text: "Choose reminder time", callback_data: "reminder:90" }],
+          [{ text: "Choose reminder time", callback_data: "reminder_hours:1" }],
           [{ text: "Self-host your own bot 🚀", callback_data: "selfhost:show" }]
         ]
       });
@@ -1316,15 +1321,23 @@ async function sendDueReminders(env: Env, chatId: number, threshold: number) {
       "INSERT OR IGNORE INTO sent_notifications(chat_id,assignment_key,threshold_minutes,sent_at) VALUES(?,?,?,?)"
     ).bind(chatId, item.assignment_key, threshold, new Date().toISOString()).run();
     if (marked.meta.changes !== 1) continue;
-    const label = threshold === 90 ? "1.5 hours" : `${threshold / 60} hour${threshold === 60 ? "" : "s"}`;
+    const hours = threshold / 60;
+    const label = `${hours} hour${hours === 1 ? "" : "s"}`;
     await send(env, chatId,
       `⏰ <b>Assignment due in ${label}</b>\n\n<b>${escapeHtml(truncate(item.title, 1_000))}</b>\n${escapeHtml(truncate(item.course, 160))} · ${escapeHtml(item.assignment_type)}\nDue: ${new Date(item.due_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}\nStatus: ${item.submitted ? "✅ Submitted" : "🟠 Not submitted"}`);
   }
 }
 
+async function sendConfiguredReminders(env: Env, chatId: number, selectedHours: number) {
+  await sendDueReminders(env, chatId, selectedHours * 60);
+  if (selectedHours !== 1) {
+    await sendDueReminders(env, chatId, 60);
+  }
+}
+
 type ScheduledAccount = {
   chat_id: number;
-  reminder_minutes: number;
+  reminder_hours: number;
   auto_relogin: number;
   last_error: string | null;
   last_sync_at: string | null;
@@ -1340,7 +1353,7 @@ async function processScheduledAccount(env: Env, account: ScheduledAccount) {
     if (syncIsDue && !requiresManualReconnect) {
       return;
     }
-    await sendDueReminders(env, account.chat_id, account.reminder_minutes);
+    await sendConfiguredReminders(env, account.chat_id, account.reminder_hours);
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
     const authenticationFailed =
@@ -1363,9 +1376,9 @@ async function runScheduled(env: Env) {
   const istNow = istDateAndHour();
   const accounts = await env.DB.prepare(
     `SELECT a.chat_id, a.last_sync_at, a.last_error, a.auto_relogin,
-            COALESCE(u.reminder_minutes, ?) AS reminder_minutes
+            COALESCE(u.reminder_hours, ?) AS reminder_hours
      FROM volp_accounts a LEFT JOIN users u ON u.chat_id=a.chat_id`
-  ).bind(DEFAULT_REMINDER_MINUTES).all<ScheduledAccount & { sync_enqueued_at: string | null }>();
+  ).bind(DEFAULT_REMINDER_HOURS).all<ScheduledAccount & { sync_enqueued_at: string | null }>();
 
   if (!isVolpMaintenanceWindow()) {
     const due = await env.DB.prepare(
@@ -1398,7 +1411,7 @@ async function runScheduled(env: Env) {
 
   for (const account of accounts.results) {
     try {
-      await sendDueReminders(env, account.chat_id, account.reminder_minutes);
+      await sendConfiguredReminders(env, account.chat_id, account.reminder_hours);
     } catch {
       // One unavailable Telegram chat must not stop reminders for other users.
     }
@@ -1642,7 +1655,7 @@ async function connectSession(request: Request, env: Env) {
       `${accountChanged ? "🔄 VOLP account switched." : "✅ VOLP connected."} Automatic re-login is enabled with encrypted password storage.\n\n${initialSyncQueued
         ? "I’ve queued your first assignment sync and will message you when it finishes. After that, I’ll check every 3 hours."
         : "I couldn’t queue your first assignment sync. Please send /sync in Telegram."}`,
-      reminderKeyboard(DEFAULT_REMINDER_MINUTES)
+      reminderKeyboard(DEFAULT_REMINDER_HOURS)
     );
     return json({ ok: true });
   } catch (error) {
