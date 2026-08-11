@@ -71,7 +71,7 @@ const MAX_CONNECTED_ACCOUNTS = 90;
 const REPOSITORY_URL = "https://github.com/nemesis0007/volp-telegram-reminder-bot";
 const REPOSITORY_FORK_URL = `${REPOSITORY_URL}/fork`;
 const SELF_HOSTING_GUIDE_URL = `${REPOSITORY_URL}/blob/main/SELF_HOSTING.md`;
-const BOT_VERSION = "1.3.7";
+const BOT_VERSION = "1.3.8";
 const TELEMETRY_ORIGIN = "https://volp-telegram-reminder-bot.nirajbots.workers.dev";
 const TELEMETRY_ENDPOINT = `${TELEMETRY_ORIGIN}/telemetry/v1`;
 const TELEMETRY_INTERVAL_MS = 24 * 60 * 60_000;
@@ -206,27 +206,20 @@ function html(body: string, status = 200) {
 function page(content: string) {
   return `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#424093"><title>Connect to VOLP</title><style>
-  :root{color-scheme:light;--volp:#424093;--volp-deep:#302d72;--accent:#ffb500;--ink:#252425;--muted:#707070;--line:#dedee7;--surface:#fff;--page:#e8e8e8}
-  *{box-sizing:border-box}body{min-height:100vh;margin:0;padding:clamp(16px,5vw,48px);background:var(--page);color:var(--ink);font:16px/1.5 Roboto,Arial,sans-serif}
-  .shell{width:min(100%,960px);min-height:620px;margin:0 auto;display:grid;grid-template-columns:minmax(280px,.88fr) minmax(380px,1.12fr);overflow:hidden;border-radius:22px;background:var(--surface);box-shadow:0 24px 70px rgba(45,43,91,.18)}
-  .brand-panel{position:relative;isolation:isolate;display:flex;flex-direction:column;overflow:hidden;padding:42px;color:#fff;background:linear-gradient(145deg,var(--volp),var(--volp-deep))}
-  .brand-panel:before,.brand-panel:after{position:absolute;z-index:-1;content:"";border-radius:50%;background:rgba(255,181,0,.14)}
-  .brand-panel:before{width:270px;height:270px;right:-120px;top:-105px}.brand-panel:after{width:190px;height:190px;left:-90px;bottom:70px;background:rgba(255,255,255,.06)}
-  .wordmark{display:flex;align-items:center;gap:13px}.volp-mark{display:grid;width:46px;height:46px;place-items:center;border:2px solid var(--accent);border-radius:13px;color:var(--accent);font-size:20px;font-weight:800}.wordmark strong{display:block;font-size:25px;line-height:1;letter-spacing:.08em}.wordmark span{display:block;margin-top:6px;color:#d8d7ef;font-size:12px;letter-spacing:.06em;text-transform:uppercase}
-  .brand-message{margin:auto 0}.brand-message h2{max-width:320px;margin:0 0 14px;font-size:clamp(30px,4vw,42px);line-height:1.12}.brand-message p{max-width:320px;margin:0;color:#dddcef;font-size:15px}.brand-rule{width:54px;height:4px;margin-bottom:22px;border-radius:3px;background:var(--accent)}
-  .independent{margin:28px 0 0;color:#c7c6e2;font-size:12px}
-  main{display:flex;flex-direction:column;justify-content:center;padding:clamp(30px,6vw,64px)}
-  .eyebrow{margin:0 0 10px;color:var(--volp);font-size:12px;font-weight:800;letter-spacing:.14em;text-transform:uppercase}h1{margin:0 0 10px;color:#2b2b2b;font-size:clamp(28px,4vw,36px);line-height:1.18}.lede{margin:0 0 24px;color:var(--muted)}
-  form{margin-top:4px}label{display:block;margin-top:17px;color:#333;font-size:14px;font-weight:700}input{width:100%;margin-top:7px;padding:14px 15px;border:1px solid var(--line);border-radius:7px;background:#fff;color:var(--ink);font:inherit;outline:0;transition:border-color .16s,box-shadow .16s}input::placeholder{color:#aaa}input:hover{border-color:#bdbdcc}input:focus{border-color:var(--volp);box-shadow:0 0 0 3px rgba(66,64,147,.14)}
-  button{width:100%;margin-top:22px;padding:14px 18px;border:1px solid var(--volp);border-radius:7px;background:var(--volp);color:#fff;font:inherit;font-weight:800;cursor:pointer;transition:background .16s,border-color .16s,transform .16s}button:hover{border-color:var(--accent);background:var(--accent);color:#252425}button:active{transform:translateY(1px)}button:focus-visible{outline:3px solid rgba(255,181,0,.48);outline-offset:3px}button:disabled{cursor:wait;opacity:.68;transform:none}
-  p{line-height:1.55}.note{font-size:13px;color:var(--muted)}.account-note{margin:18px 0 0;padding-top:17px;border-top:1px solid #eeeeF4}.security-card{display:flex;gap:11px;margin:20px 0 0;padding:13px 14px;border-left:4px solid var(--accent);border-radius:6px;background:#fffaea;color:#5d4b13;font-size:13px}.security-card span{font-size:17px}.security-card p{margin:0}.status{min-height:20px;margin:16px 0 0;text-align:center}.error{color:#b42318;font-weight:700}.state-card{padding:10px 0}.state-icon{display:grid;width:54px;height:54px;margin-bottom:22px;place-items:center;border-radius:16px;background:#eeedf8;color:var(--volp);font-size:25px}.success .state-icon{background:#e8f7ef;color:#087443}
-  @media(max-width:720px){body{padding:0;background:#fff}.shell{min-height:100vh;grid-template-columns:1fr;border-radius:0;box-shadow:none}.brand-panel{min-height:210px;padding:28px}.brand-message{margin:34px 0 0}.brand-message h2{font-size:27px}.brand-message p,.independent{display:none}main{padding:34px 26px 42px;justify-content:flex-start}}
+  :root{color-scheme:light;--volp:#49459b;--blue:#0b0c91;--accent:#eca918;--ink:#252525;--muted:#767676;--field:#e8f0fc;--panel:#e7e7e9}
+  *{box-sizing:border-box}body{min-height:100vh;margin:0;color:var(--ink);font:16px/1.5 Roboto,Arial,sans-serif}.shell{min-height:100vh;display:grid;grid-template-columns:1fr 1fr;background:#fff}
+  .brand-panel{position:relative;display:flex;align-items:center;justify-content:center;background:var(--panel)}.tile-logo{width:min(31vw,288px);height:min(25vw,235px);display:grid;grid-template-columns:1fr 1fr;align-content:center;justify-items:center;padding:22px 42px 25px;border-radius:13px;background:var(--volp);color:#fff;font-size:clamp(64px,7vw,100px);font-weight:900;line-height:.77;letter-spacing:-.08em;transform:translateY(-9vh);box-shadow:0 1px 1px rgba(0,0,0,.08)}.tile-logo .gold{color:var(--accent)}.independent{position:absolute;bottom:26px;left:24px;right:24px;margin:0;text-align:center;color:#8c8c91;font-size:11px;letter-spacing:.02em}
+  main{display:flex;align-items:flex-start;justify-content:center;padding:clamp(72px,13vh,132px) clamp(28px,6vw,112px) 56px}.form-column{width:min(100%,585px)}.top-wordmark{text-align:center;color:var(--blue);font-size:clamp(48px,5vw,66px);font-weight:900;line-height:1;letter-spacing:.02em}.top-wordmark .gold{color:var(--accent)}
+  .signin-title{margin:23px 0 48px;text-align:center;color:var(--blue);font-size:26px;font-weight:800;line-height:1}.signin-title span{color:var(--accent)}form{margin:0}.field-row{display:grid;grid-template-columns:42px minmax(0,1fr) 36px;align-items:end}.field-row+.field-row{margin-top:40px}.field-row label{display:block}.field-row input{width:100%;height:42px;padding:10px 2px;border:0;border-bottom:1px solid #aaa;border-radius:0;background:var(--field);color:#171717;font:inherit;outline:0}.field-row input:focus{border-bottom:2px solid var(--volp);box-shadow:0 3px 0 rgba(73,69,155,.1)}.field-row input::placeholder{color:#888}.sr-only{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
+  .field-icon{position:relative;width:32px;height:42px;color:#7d7d7d}.user-icon:before{position:absolute;top:9px;left:11px;width:10px;height:10px;border-radius:50%;background:currentColor;content:""}.user-icon:after{position:absolute;bottom:6px;left:6px;width:21px;height:10px;border-radius:12px 12px 2px 2px;background:currentColor;content:""}.lock-icon:before{position:absolute;top:8px;left:9px;width:13px;height:14px;border:3px solid currentColor;border-bottom:0;border-radius:9px 9px 0 0;content:""}.lock-icon:after{position:absolute;bottom:5px;left:7px;width:19px;height:18px;border-radius:2px;background:currentColor;content:""}
+  .eye-toggle{position:relative;width:36px;height:42px;margin:0;border:0;background:transparent;color:#7d7d7d;cursor:pointer}.eye-toggle:before{position:absolute;top:13px;left:7px;width:20px;height:13px;border:3px solid currentColor;border-radius:75% 8% 75% 8%;content:"";transform:rotate(45deg)}.eye-toggle:after{position:absolute;top:18px;left:14px;width:7px;height:7px;border-radius:50%;background:currentColor;content:""}.eye-toggle:focus-visible{outline:3px solid rgba(236,169,24,.45);outline-offset:1px}
+  .submit-button{width:calc(100% - 4px);margin:58px 2px 0;padding:11px 18px;border:0;border-radius:28px;background:var(--volp);box-shadow:0 3px 5px rgba(37,37,37,.28);color:#fff;font:inherit;font-size:19px;font-weight:800;letter-spacing:.03em;cursor:pointer}.submit-button:hover{background:#3f3b8b}.submit-button:focus-visible{outline:3px solid rgba(236,169,24,.5);outline-offset:3px}.submit-button:disabled{cursor:wait;opacity:.68}.status{min-height:22px;margin:14px 0 0;text-align:center}.note{color:var(--muted);font-size:13px}.error{color:#b42318;font-weight:700}.security-note{margin:38px 0 0;text-align:center;color:var(--volp);font-size:14px}.account-note{max-width:500px;margin:18px auto 0;text-align:center;line-height:1.55}.state-card{padding-top:48px;text-align:center}.state-card h1{margin:12px 0;color:var(--blue);font-size:34px}.state-card .lede{color:var(--muted)}.state-icon{display:grid;width:58px;height:58px;margin:0 auto 22px;place-items:center;border-radius:50%;background:#eeedf8;color:var(--volp);font-size:26px}.success .state-icon{background:#e8f7ef;color:#087443}
+  @media(max-width:760px){.shell{grid-template-columns:1fr}.brand-panel{min-height:210px}.tile-logo{width:150px;height:124px;padding:13px 23px 15px;font-size:54px;transform:none}.independent{bottom:12px;font-size:10px}main{padding:38px 24px 54px}.top-wordmark{font-size:49px}.signin-title{margin:18px 0 42px}.submit-button{margin-top:46px}}
   @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}
   </style></head><body><div class="shell"><aside class="brand-panel" aria-label="VOLP Assignment Reminder">
-    <div class="wordmark"><div class="volp-mark" aria-hidden="true">V</div><div><strong>VOLP</strong><span>Assignment Reminder</span></div></div>
-    <div class="brand-message"><div class="brand-rule"></div><h2>Stay ahead of every deadline.</h2><p>Connect once, then receive assignment updates and reminders directly in Telegram.</p></div>
+    <div class="tile-logo" aria-hidden="true"><span>V</span><span class="gold">O</span><span>L</span><span>P</span></div>
     <p class="independent">Independent open-source companion · Not affiliated with VOLP or VIT</p>
-  </aside><main>${content}</main></div></body></html>`;
+  </aside><main><div class="form-column"><div class="top-wordmark" aria-label="VOLP"><span>V</span><span class="gold">O</span><span>LP</span></div><div id="page-content">${content}</div></div></main></div></body></html>`;
 }
 
 function escapeHtml(value: string) {
@@ -1448,26 +1441,33 @@ async function runScheduled(env: Env) {
 
 async function connectGet(env: Env, token: string) {
   const row = await env.DB.prepare("SELECT token FROM setup_tokens WHERE token=? AND expires_at>?").bind(token, new Date().toISOString()).first();
-  if (!row) return html(page(`<section class="state-card"><div class="state-icon" aria-hidden="true">⌛</div><p class="eyebrow">Connection link</p><h1>Link expired</h1><p class="lede">Return to Telegram and send <b>/connect</b> to create a fresh secure link.</p></section>`), 410);
-  return html(page(`<p class="eyebrow">Learner sign in</p><h1>Connect to VOLP</h1>
-    <p class="lede">Use the same username and password you use on VOLP.</p>
+  if (!row) return html(page(`<section class="state-card"><div class="state-icon" aria-hidden="true">⌛</div><h1>Link expired</h1><p class="lede">Return to Telegram and send <b>/connect</b> to create a fresh secure link.</p></section>`), 410);
+  return html(page(`<p class="signin-title">SIGN <span>IN</span></p>
     <form id="connect-form">
       <input type="hidden" id="setup-token" value="${escapeHtml(token)}">
-      <label for="username">VOLP username<input id="username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="Enter your username" required maxlength="160"></label>
-      <label for="password">VOLP password<input id="password" type="password" name="password" autocomplete="current-password" placeholder="Enter your password" required maxlength="300"></label>
-      <div class="security-card"><span aria-hidden="true">🔒</span><p>Your password is protected with AES-GCM encryption and used only for automatic VOLP re-login. Send <b>/disconnect</b> in Telegram to erase it and all saved data.</p></div>
-      <button type="submit">Connect VOLP account</button>
+      <div class="field-row"><span class="field-icon user-icon" aria-hidden="true"></span><label for="username"><span class="sr-only">VOLP username</span><input id="username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="VOLP username" required maxlength="160"></label><span></span></div>
+      <div class="field-row"><span class="field-icon lock-icon" aria-hidden="true"></span><label for="password"><span class="sr-only">VOLP password</span><input id="password" type="password" name="password" autocomplete="current-password" placeholder="VOLP password" required maxlength="300"></label><button class="eye-toggle" type="button" aria-label="Show password" aria-pressed="false"></button></div>
+      <button class="submit-button" type="submit">SIGN IN</button>
     </form>
     <p id="status" class="status note" role="status" aria-live="polite"></p>
-    <p class="note account-note">Already connected another account? Signing in here safely replaces it and refreshes the saved assignments for this Telegram chat.</p>
+    <p class="security-note">Password encrypted for automatic re-login</p>
+    <p class="note account-note">Send <b>/disconnect</b> in Telegram anytime to erase your credentials and saved data. Signing in with a different account safely replaces the current one.</p>
     <script>
     const form = document.getElementById("connect-form");
     const status = document.getElementById("status");
+    const password = document.getElementById("password");
+    const eyeToggle = form.querySelector(".eye-toggle");
+    eyeToggle.addEventListener("click", () => {
+      const showing = password.type === "text";
+      password.type = showing ? "password" : "text";
+      eyeToggle.setAttribute("aria-label", showing ? "Show password" : "Hide password");
+      eyeToggle.setAttribute("aria-pressed", String(!showing));
+    });
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       const button = form.querySelector('button[type="submit"]');
       button.disabled = true;
-      button.textContent = "Connecting…";
+      button.textContent = "SIGNING IN…";
       status.textContent = "Contacting VOLP…";
       const data = new FormData(form);
       try {
@@ -1498,13 +1498,13 @@ async function connectGet(env: Env, token: string) {
           })
         });
         if (!saved.ok) throw new Error("Could not save the VOLP session");
-        document.querySelector("main").innerHTML =
-          '<section class="state-card success"><div class="state-icon" aria-hidden="true">✓</div><p class="eyebrow">Connection complete</p><h1>VOLP connected</h1><p class="lede">You can return to Telegram now. The bot is loading your assignments and automatic re-login is enabled.</p><p class="note">Send <b>/disconnect</b> anytime to erase your saved credentials and assignment data.</p></section>';
+        document.getElementById("page-content").innerHTML =
+          '<section class="state-card success"><div class="state-icon" aria-hidden="true">✓</div><h1>VOLP connected</h1><p class="lede">You can return to Telegram now. The bot is loading your assignments and automatic re-login is enabled.</p><p class="note">Send <b>/disconnect</b> anytime to erase your saved credentials and assignment data.</p></section>';
       } catch (error) {
         status.textContent = "Login failed or VOLP is unavailable. Please try again later.";
         status.className = "status error";
         button.disabled = false;
-        button.textContent = "Connect VOLP account";
+        button.textContent = "SIGN IN";
       }
     });
     </script>`));
