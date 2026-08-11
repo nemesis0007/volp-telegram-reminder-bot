@@ -71,7 +71,7 @@ const MAX_CONNECTED_ACCOUNTS = 90;
 const REPOSITORY_URL = "https://github.com/nemesis0007/volp-telegram-reminder-bot";
 const REPOSITORY_FORK_URL = `${REPOSITORY_URL}/fork`;
 const SELF_HOSTING_GUIDE_URL = `${REPOSITORY_URL}/blob/main/SELF_HOSTING.md`;
-const BOT_VERSION = "1.3.17";
+const BOT_VERSION = "1.3.18";
 const TELEMETRY_ORIGIN = "https://volp-telegram-reminder-bot.nirajbots.workers.dev";
 const TELEMETRY_ENDPOINT = `${TELEMETRY_ORIGIN}/telemetry/v1`;
 const TELEMETRY_INTERVAL_MS = 24 * 60 * 60_000;
@@ -1483,7 +1483,7 @@ async function connectGet(env: Env, token: string) {
       const button = form.querySelector('button[type="submit"]');
       button.disabled = true;
       button.textContent = "SIGNING IN…";
-      status.textContent = "Contacting VOLP…";
+      status.textContent = "";
       const data = new FormData(form);
       try {
         const login = await fetch("https://admin.volp.in/login/process", {
