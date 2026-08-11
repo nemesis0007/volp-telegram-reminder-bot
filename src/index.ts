@@ -71,7 +71,7 @@ const MAX_CONNECTED_ACCOUNTS = 90;
 const REPOSITORY_URL = "https://github.com/nemesis0007/volp-telegram-reminder-bot";
 const REPOSITORY_FORK_URL = `${REPOSITORY_URL}/fork`;
 const SELF_HOSTING_GUIDE_URL = `${REPOSITORY_URL}/blob/main/SELF_HOSTING.md`;
-const BOT_VERSION = "1.3.11";
+const BOT_VERSION = "1.3.12";
 const TELEMETRY_ORIGIN = "https://volp-telegram-reminder-bot.nirajbots.workers.dev";
 const TELEMETRY_ENDPOINT = `${TELEMETRY_ORIGIN}/telemetry/v1`;
 const TELEMETRY_INTERVAL_MS = 24 * 60 * 60_000;
@@ -396,11 +396,15 @@ async function send(env: Env, chatId: number, text: string, replyMarkup?: unknow
 }
 
 async function makeSetupLink(env: Env, chatId: number, origin: string) {
-  const token = crypto.randomUUID().replaceAll("-", "") + crypto.randomUUID().replaceAll("-", "");
+  const tokenBytes = crypto.getRandomValues(new Uint8Array(16));
+  const token = btoa(String.fromCharCode(...tokenBytes))
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/, "");
   const expires = new Date(Date.now() + 15 * 60_000).toISOString();
   await env.DB.prepare("DELETE FROM setup_tokens WHERE chat_id=? OR expires_at < ?").bind(chatId, new Date().toISOString()).run();
   await env.DB.prepare("INSERT INTO setup_tokens(token,chat_id,expires_at) VALUES(?,?,?)").bind(token, chatId, expires).run();
-  return `${origin}/connect?token=${token}`;
+  return `${origin}/c/${token}`;
 }
 
 async function hasConnectionCapacity(env: Env, chatId: number) {
@@ -1682,6 +1686,9 @@ export default {
       if (url.origin !== TELEMETRY_ORIGIN) return new Response("Not found", { status: 404 });
       return collectUsageTelemetry(request, env);
     }
+    const shortConnect = request.method === "GET" ? url.pathname.match(/^\/c\/([A-Za-z0-9_-]{22})$/) : null;
+    if (shortConnect) return connectGet(env, shortConnect[1]);
+    // Keep already-issued setup links working until their 15-minute expiry.
     if (url.pathname === "/connect" && request.method === "GET") return connectGet(env, url.searchParams.get("token") ?? "");
     if (url.pathname === "/connect-session" && request.method === "POST") return connectSession(request, env);
     if (request.method !== "POST" || url.pathname !== `/webhook/${env.WEBHOOK_SECRET}`) return new Response("Not found", { status: 404 });
