@@ -69,7 +69,7 @@ const MAX_CONNECTED_ACCOUNTS = 90;
 const REPOSITORY_URL = "https://github.com/nemesis0007/volp-telegram-reminder-bot";
 const REPOSITORY_FORK_URL = `${REPOSITORY_URL}/fork`;
 const SELF_HOSTING_GUIDE_URL = `${REPOSITORY_URL}/blob/main/SELF_HOSTING.md`;
-const BOT_VERSION = "1.4.1";
+const BOT_VERSION = "1.4.2";
 const TELEMETRY_ORIGIN = "https://volp-telegram-reminder-bot.nirajbots.workers.dev";
 const TELEMETRY_ENDPOINT = `${TELEMETRY_ORIGIN}/telemetry/v1`;
 const TELEMETRY_INTERVAL_MS = 24 * 60 * 60_000;
@@ -511,7 +511,11 @@ async function handleCallback(env: Env, callback: any) {
     callback_query_id: callback.id,
     text: `${hours === 1 ? "Reminder" : "Additional reminder"} set to ${hours} hour${hours === 1 ? "" : "s"} before`
   });
-  return showSettings(env, chatId);
+  return send(
+    env,
+    chatId,
+    `✅ Reminder set to <b>${hours} hour${hours === 1 ? "" : "s"} before the deadline</b>.${hours === 1 ? "" : " You’ll also receive the standard 1-hour reminder."}`
+  );
 }
 
 type StoredAssignment = {
