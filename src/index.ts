@@ -71,7 +71,7 @@ const MAX_CONNECTED_ACCOUNTS = 90;
 const REPOSITORY_URL = "https://github.com/nemesis0007/volp-telegram-reminder-bot";
 const REPOSITORY_FORK_URL = `${REPOSITORY_URL}/fork`;
 const SELF_HOSTING_GUIDE_URL = `${REPOSITORY_URL}/blob/main/SELF_HOSTING.md`;
-const BOT_VERSION = "1.3.18";
+const BOT_VERSION = "1.3.19";
 const TELEMETRY_ORIGIN = "https://volp-telegram-reminder-bot.nirajbots.workers.dev";
 const TELEMETRY_ENDPOINT = `${TELEMETRY_ORIGIN}/telemetry/v1`;
 const TELEMETRY_INTERVAL_MS = 24 * 60 * 60_000;
@@ -1464,13 +1464,23 @@ async function connectGet(env: Env, token: string) {
     if (telegramApp?.initData) {
       telegramApp.ready();
       telegramApp.expand();
-      browserLink.href = window.location.origin + window.location.pathname;
+      const externalUrl = window.location.href;
+      browserLink.href = externalUrl;
       browserLink.hidden = false;
       browserLink.addEventListener("click", (event) => {
         if (!telegramApp.openLink) return;
         event.preventDefault();
         telegramApp.openLink(browserLink.href);
       });
+      if (telegramApp.openLink) {
+        setTimeout(() => {
+          try {
+            telegramApp.openLink(externalUrl);
+          } catch (_) {
+            // The visible link remains available when Telegram blocks auto-opening.
+          }
+        }, 150);
+      }
     }
     eyeToggle.addEventListener("click", () => {
       const showing = password.type === "text";
