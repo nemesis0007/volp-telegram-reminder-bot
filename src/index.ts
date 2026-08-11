@@ -71,7 +71,7 @@ const MAX_CONNECTED_ACCOUNTS = 90;
 const REPOSITORY_URL = "https://github.com/nemesis0007/volp-telegram-reminder-bot";
 const REPOSITORY_FORK_URL = `${REPOSITORY_URL}/fork`;
 const SELF_HOSTING_GUIDE_URL = `${REPOSITORY_URL}/blob/main/SELF_HOSTING.md`;
-const BOT_VERSION = "1.3.19";
+const BOT_VERSION = "1.3.20";
 const TELEMETRY_ORIGIN = "https://volp-telegram-reminder-bot.nirajbots.workers.dev";
 const TELEMETRY_ENDPOINT = `${TELEMETRY_ORIGIN}/telemetry/v1`;
 const TELEMETRY_INTERVAL_MS = 24 * 60 * 60_000;
@@ -212,7 +212,7 @@ function page(content: string) {
   .signin-title{margin:18px 0 43px;text-align:center;color:var(--blue);font-size:21px;font-weight:800;line-height:1}.signin-title span{color:var(--accent)}form{margin:0}.field-row{display:grid;grid-template-columns:34px minmax(0,1fr) 29px;align-items:end}.field-row+.field-row{margin-top:34px}.field-row label{display:block}.field-row input{width:100%;height:33px;padding:6px 1px;border:0;border-bottom:1px solid #aaa;border-radius:0;background:var(--field);color:#171717;font:16px/1.2 Roboto,Arial,sans-serif;outline:0}.field-row input:focus{border-bottom:2px solid var(--volp);box-shadow:0 3px 0 rgba(73,69,155,.1)}.field-row input::placeholder{color:#888}.sr-only{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
   .field-icon{position:relative;width:27px;height:33px;color:#7d7d7d}.user-icon:before{position:absolute;top:7px;left:9px;width:8px;height:8px;border-radius:50%;background:currentColor;content:""}.user-icon:after{position:absolute;bottom:4px;left:5px;width:17px;height:8px;border-radius:10px 10px 2px 2px;background:currentColor;content:""}.lock-icon:before{position:absolute;top:6px;left:7px;width:11px;height:12px;border:2px solid currentColor;border-bottom:0;border-radius:8px 8px 0 0;content:""}.lock-icon:after{position:absolute;bottom:4px;left:6px;width:16px;height:15px;border-radius:2px;background:currentColor;content:""}
   .eye-toggle{width:29px;height:33px;display:grid;place-items:center;margin:0;border:0;background:transparent;color:#7d7d7d;cursor:pointer}.eye-toggle svg{width:22px;height:22px;display:block;fill:currentColor}.eye-toggle[aria-pressed="false"] .visibility-off,.eye-toggle[aria-pressed="true"] .visibility-on{display:none}.eye-toggle:focus-visible{outline:3px solid rgba(236,169,24,.45);outline-offset:1px}
-  .submit-button{width:100%;margin:50px 0 0;padding:10px 16px;border:0;border-radius:24px;background:var(--volp);box-shadow:0 2px 4px rgba(37,37,37,.28);color:#fff;font:800 15px/1.2 Roboto,Arial,sans-serif;letter-spacing:.03em;cursor:pointer}.submit-button:hover{background:#3f3b8b}.submit-button:focus-visible{outline:3px solid rgba(236,169,24,.5);outline-offset:3px}.submit-button:disabled{cursor:wait;opacity:.68}.status{min-height:18px;margin:10px 0 0;text-align:center}.note{color:var(--muted);font-size:13px}.error{color:#b42318;font-weight:700}.browser-link{display:block;width:max-content;margin:14px 0 -2px auto;color:#2f2a9c;font-size:13px;font-weight:700;text-decoration:none}.browser-link:hover{text-decoration:underline}.browser-link[hidden]{display:none}.forgot{display:block;margin:38px 0 0;text-align:center;color:#2f2a9c;font-size:16px;text-decoration:none}.forgot:hover{text-decoration:underline}.support-copy{margin-top:36px;text-align:center}.support-copy p{margin:0;color:#777;font-size:15px;letter-spacing:.08em}.support-copy .cache-note{display:inline-block;margin-top:10px;padding:0 2px;background:#fff96d;color:#8e8a32;font-size:12px;font-style:italic;letter-spacing:0}.state-card{padding-top:42px;text-align:center}.state-card h1{margin:12px 0;color:var(--blue);font-size:28px}.state-card .lede{color:var(--muted)}.state-icon{display:grid;width:48px;height:48px;margin:0 auto 18px;place-items:center;border-radius:50%;background:#eeedf8;color:var(--volp);font-size:22px}.success .state-icon{background:#e8f7ef;color:#087443}
+  .submit-button{width:100%;margin:50px 0 0;padding:10px 16px;border:0;border-radius:24px;background:var(--volp);box-shadow:0 2px 4px rgba(37,37,37,.28);color:#fff;font:800 15px/1.2 Roboto,Arial,sans-serif;letter-spacing:.03em;cursor:pointer}.submit-button:hover{background:#3f3b8b}.submit-button:focus-visible{outline:3px solid rgba(236,169,24,.5);outline-offset:3px}.submit-button:disabled{cursor:wait;opacity:.68}.status{min-height:18px;margin:10px 0 0;text-align:center}.note{color:var(--muted);font-size:13px}.error{color:#b42318;font-weight:700}.forgot{display:block;margin:38px 0 0;text-align:center;color:#2f2a9c;font-size:16px;text-decoration:none}.forgot:hover{text-decoration:underline}.support-copy{margin-top:36px;text-align:center}.support-copy p{margin:0;color:#777;font-size:15px;letter-spacing:.08em}.support-copy .cache-note{display:inline-block;margin-top:10px;padding:0 2px;background:#fff96d;color:#8e8a32;font-size:12px;font-style:italic;letter-spacing:0}.state-card{padding-top:42px;text-align:center}.state-card h1{margin:12px 0;color:var(--blue);font-size:28px}.state-card .lede{color:var(--muted)}.state-icon{display:grid;width:48px;height:48px;margin:0 auto 18px;place-items:center;border-radius:50%;background:#eeedf8;color:var(--volp);font-size:22px}.success .state-icon{background:#e8f7ef;color:#087443}
   @media(max-width:760px){.shell{grid-template-columns:1fr}.brand-panel{min-height:190px}.tile-logo{width:138px;height:113px;padding:12px 21px 14px;font-size:49px;transform:none}main{padding:34px 24px 50px}.form-column{width:min(100%,468px)}.top-wordmark{font-size:43px}.signin-title{margin:16px 0 38px}.submit-button{margin-top:42px}.support-copy{margin-top:30px}}
   @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}
   </style><script src="https://telegram.org/js/telegram-web-app.js"></script></head><body><div class="shell"><aside class="brand-panel" aria-label="VOLP Assignment Reminder">
@@ -1444,7 +1444,7 @@ async function runScheduled(env: Env) {
 async function connectGet(env: Env, token: string) {
   const row = await env.DB.prepare("SELECT token FROM setup_tokens WHERE token=? AND expires_at>?").bind(token, new Date().toISOString()).first();
   if (!row) return html(page(`<section class="state-card"><div class="state-icon" aria-hidden="true">⌛</div><h1>Link expired</h1><p class="lede">Return to Telegram and send <b>/connect</b> to create a fresh secure link.</p></section>`), 410);
-  return html(page(`<a id="open-browser" class="browser-link" href="#" target="_blank" rel="noopener noreferrer" hidden>Open in browser ↗</a><p class="signin-title">SIGN <span>IN</span></p>
+  return html(page(`<p class="signin-title">SIGN <span>IN</span></p>
     <form id="connect-form">
       <input type="hidden" id="setup-token" value="${escapeHtml(token)}">
       <div class="field-row"><span class="field-icon user-icon" aria-hidden="true"></span><label for="username"><span class="sr-only">VOLP username</span><input id="username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="VOLP username" required maxlength="160"></label><span></span></div>
@@ -1459,25 +1459,17 @@ async function connectGet(env: Env, token: string) {
     const status = document.getElementById("status");
     const password = document.getElementById("password");
     const eyeToggle = form.querySelector(".eye-toggle");
-    const browserLink = document.getElementById("open-browser");
     const telegramApp = window.Telegram?.WebApp;
     if (telegramApp?.initData) {
       telegramApp.ready();
       telegramApp.expand();
       const externalUrl = window.location.href;
-      browserLink.href = externalUrl;
-      browserLink.hidden = false;
-      browserLink.addEventListener("click", (event) => {
-        if (!telegramApp.openLink) return;
-        event.preventDefault();
-        telegramApp.openLink(browserLink.href);
-      });
       if (telegramApp.openLink) {
         setTimeout(() => {
           try {
             telegramApp.openLink(externalUrl);
           } catch (_) {
-            // The visible link remains available when Telegram blocks auto-opening.
+            // Some Telegram clients may block automatic external navigation.
           }
         }, 150);
       }
