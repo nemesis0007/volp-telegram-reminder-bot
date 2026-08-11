@@ -71,7 +71,7 @@ const MAX_CONNECTED_ACCOUNTS = 90;
 const REPOSITORY_URL = "https://github.com/nemesis0007/volp-telegram-reminder-bot";
 const REPOSITORY_FORK_URL = `${REPOSITORY_URL}/fork`;
 const SELF_HOSTING_GUIDE_URL = `${REPOSITORY_URL}/blob/main/SELF_HOSTING.md`;
-const BOT_VERSION = "1.3.6";
+const BOT_VERSION = "1.3.7";
 const TELEMETRY_ORIGIN = "https://volp-telegram-reminder-bot.nirajbots.workers.dev";
 const TELEMETRY_ENDPOINT = `${TELEMETRY_ORIGIN}/telemetry/v1`;
 const TELEMETRY_INTERVAL_MS = 24 * 60 * 60_000;
@@ -205,14 +205,28 @@ function html(body: string, status = 200) {
 
 function page(content: string) {
   return `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Connect VOLP</title><style>
-  body{font:16px system-ui;background:#f4f6fb;color:#172033;margin:0;padding:24px}
-  main{max-width:430px;margin:8vh auto;background:white;padding:28px;border-radius:18px;box-shadow:0 12px 40px #17203318}
-  h1{margin-top:0}label{display:block;font-weight:650;margin-top:16px}input{box-sizing:border-box;width:100%;padding:12px;margin-top:6px;border:1px solid #cbd2df;border-radius:10px;font:inherit}
-  button{width:100%;padding:13px;margin-top:22px;border:0;border-radius:10px;background:#2864dc;color:white;font:inherit;font-weight:700}
-  p{line-height:1.5}.note{font-size:13px;color:#596579}.error{color:#b42318}
-  .check{display:flex;align-items:flex-start;gap:10px;font-weight:600}.check input{width:auto;margin-top:4px}.warning{padding:10px;border-radius:9px;background:#fff4e5;color:#7a4300}
-  </style></head><body><main>${content}</main></body></html>`;
+  <meta name="theme-color" content="#424093"><title>Connect to VOLP</title><style>
+  :root{color-scheme:light;--volp:#424093;--volp-deep:#302d72;--accent:#ffb500;--ink:#252425;--muted:#707070;--line:#dedee7;--surface:#fff;--page:#e8e8e8}
+  *{box-sizing:border-box}body{min-height:100vh;margin:0;padding:clamp(16px,5vw,48px);background:var(--page);color:var(--ink);font:16px/1.5 Roboto,Arial,sans-serif}
+  .shell{width:min(100%,960px);min-height:620px;margin:0 auto;display:grid;grid-template-columns:minmax(280px,.88fr) minmax(380px,1.12fr);overflow:hidden;border-radius:22px;background:var(--surface);box-shadow:0 24px 70px rgba(45,43,91,.18)}
+  .brand-panel{position:relative;isolation:isolate;display:flex;flex-direction:column;overflow:hidden;padding:42px;color:#fff;background:linear-gradient(145deg,var(--volp),var(--volp-deep))}
+  .brand-panel:before,.brand-panel:after{position:absolute;z-index:-1;content:"";border-radius:50%;background:rgba(255,181,0,.14)}
+  .brand-panel:before{width:270px;height:270px;right:-120px;top:-105px}.brand-panel:after{width:190px;height:190px;left:-90px;bottom:70px;background:rgba(255,255,255,.06)}
+  .wordmark{display:flex;align-items:center;gap:13px}.volp-mark{display:grid;width:46px;height:46px;place-items:center;border:2px solid var(--accent);border-radius:13px;color:var(--accent);font-size:20px;font-weight:800}.wordmark strong{display:block;font-size:25px;line-height:1;letter-spacing:.08em}.wordmark span{display:block;margin-top:6px;color:#d8d7ef;font-size:12px;letter-spacing:.06em;text-transform:uppercase}
+  .brand-message{margin:auto 0}.brand-message h2{max-width:320px;margin:0 0 14px;font-size:clamp(30px,4vw,42px);line-height:1.12}.brand-message p{max-width:320px;margin:0;color:#dddcef;font-size:15px}.brand-rule{width:54px;height:4px;margin-bottom:22px;border-radius:3px;background:var(--accent)}
+  .independent{margin:28px 0 0;color:#c7c6e2;font-size:12px}
+  main{display:flex;flex-direction:column;justify-content:center;padding:clamp(30px,6vw,64px)}
+  .eyebrow{margin:0 0 10px;color:var(--volp);font-size:12px;font-weight:800;letter-spacing:.14em;text-transform:uppercase}h1{margin:0 0 10px;color:#2b2b2b;font-size:clamp(28px,4vw,36px);line-height:1.18}.lede{margin:0 0 24px;color:var(--muted)}
+  form{margin-top:4px}label{display:block;margin-top:17px;color:#333;font-size:14px;font-weight:700}input{width:100%;margin-top:7px;padding:14px 15px;border:1px solid var(--line);border-radius:7px;background:#fff;color:var(--ink);font:inherit;outline:0;transition:border-color .16s,box-shadow .16s}input::placeholder{color:#aaa}input:hover{border-color:#bdbdcc}input:focus{border-color:var(--volp);box-shadow:0 0 0 3px rgba(66,64,147,.14)}
+  button{width:100%;margin-top:22px;padding:14px 18px;border:1px solid var(--volp);border-radius:7px;background:var(--volp);color:#fff;font:inherit;font-weight:800;cursor:pointer;transition:background .16s,border-color .16s,transform .16s}button:hover{border-color:var(--accent);background:var(--accent);color:#252425}button:active{transform:translateY(1px)}button:focus-visible{outline:3px solid rgba(255,181,0,.48);outline-offset:3px}button:disabled{cursor:wait;opacity:.68;transform:none}
+  p{line-height:1.55}.note{font-size:13px;color:var(--muted)}.account-note{margin:18px 0 0;padding-top:17px;border-top:1px solid #eeeeF4}.security-card{display:flex;gap:11px;margin:20px 0 0;padding:13px 14px;border-left:4px solid var(--accent);border-radius:6px;background:#fffaea;color:#5d4b13;font-size:13px}.security-card span{font-size:17px}.security-card p{margin:0}.status{min-height:20px;margin:16px 0 0;text-align:center}.error{color:#b42318;font-weight:700}.state-card{padding:10px 0}.state-icon{display:grid;width:54px;height:54px;margin-bottom:22px;place-items:center;border-radius:16px;background:#eeedf8;color:var(--volp);font-size:25px}.success .state-icon{background:#e8f7ef;color:#087443}
+  @media(max-width:720px){body{padding:0;background:#fff}.shell{min-height:100vh;grid-template-columns:1fr;border-radius:0;box-shadow:none}.brand-panel{min-height:210px;padding:28px}.brand-message{margin:34px 0 0}.brand-message h2{font-size:27px}.brand-message p,.independent{display:none}main{padding:34px 26px 42px;justify-content:flex-start}}
+  @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}
+  </style></head><body><div class="shell"><aside class="brand-panel" aria-label="VOLP Assignment Reminder">
+    <div class="wordmark"><div class="volp-mark" aria-hidden="true">V</div><div><strong>VOLP</strong><span>Assignment Reminder</span></div></div>
+    <div class="brand-message"><div class="brand-rule"></div><h2>Stay ahead of every deadline.</h2><p>Connect once, then receive assignment updates and reminders directly in Telegram.</p></div>
+    <p class="independent">Independent open-source companion · Not affiliated with VOLP or VIT</p>
+  </aside><main>${content}</main></div></body></html>`;
 }
 
 function escapeHtml(value: string) {
@@ -1434,25 +1448,26 @@ async function runScheduled(env: Env) {
 
 async function connectGet(env: Env, token: string) {
   const row = await env.DB.prepare("SELECT token FROM setup_tokens WHERE token=? AND expires_at>?").bind(token, new Date().toISOString()).first();
-  if (!row) return html(page("<h1>Link expired</h1><p>Return to Telegram and send <b>/connect</b> for a new link.</p>"), 410);
-  return html(page(`<h1>Connect through VOLP</h1>
-    <p>Your password is sent to VOLP and stored <b>encrypted</b> by this bot so it can automatically sign in again when VOLP expires the session.</p>
-    <p class="note">If this Telegram chat already has a VOLP account, connecting a different one safely replaces it and clears the previous account's cached assignments.</p>
+  if (!row) return html(page(`<section class="state-card"><div class="state-icon" aria-hidden="true">⌛</div><p class="eyebrow">Connection link</p><h1>Link expired</h1><p class="lede">Return to Telegram and send <b>/connect</b> to create a fresh secure link.</p></section>`), 410);
+  return html(page(`<p class="eyebrow">Learner sign in</p><h1>Connect to VOLP</h1>
+    <p class="lede">Use the same username and password you use on VOLP.</p>
     <form id="connect-form">
       <input type="hidden" id="setup-token" value="${escapeHtml(token)}">
-      <label>VOLP username<input name="username" autocomplete="username" required maxlength="160"></label>
-      <label>VOLP password<input type="password" name="password" autocomplete="current-password" required maxlength="300"></label>
-      <p class="note warning">Required: your password is stored using AES-GCM encryption and used only for automatic VOLP re-login. Use /disconnect in Telegram to erase it and all other saved data.</p>
-      <button type="submit">Sign in directly with VOLP</button>
+      <label for="username">VOLP username<input id="username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="Enter your username" required maxlength="160"></label>
+      <label for="password">VOLP password<input id="password" type="password" name="password" autocomplete="current-password" placeholder="Enter your password" required maxlength="300"></label>
+      <div class="security-card"><span aria-hidden="true">🔒</span><p>Your password is protected with AES-GCM encryption and used only for automatic VOLP re-login. Send <b>/disconnect</b> in Telegram to erase it and all saved data.</p></div>
+      <button type="submit">Connect VOLP account</button>
     </form>
-    <p id="status" class="note">You can erase all stored credentials and data anytime with /disconnect.</p>
+    <p id="status" class="status note" role="status" aria-live="polite"></p>
+    <p class="note account-note">Already connected another account? Signing in here safely replaces it and refreshes the saved assignments for this Telegram chat.</p>
     <script>
     const form = document.getElementById("connect-form");
     const status = document.getElementById("status");
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const button = form.querySelector("button");
+      const button = form.querySelector('button[type="submit"]');
       button.disabled = true;
+      button.textContent = "Connecting…";
       status.textContent = "Contacting VOLP…";
       const data = new FormData(form);
       try {
@@ -1484,11 +1499,12 @@ async function connectGet(env: Env, token: string) {
         });
         if (!saved.ok) throw new Error("Could not save the VOLP session");
         document.querySelector("main").innerHTML =
-          "<h1>Connected ✅</h1><p>Automatic re-login is enabled. Your password is stored encrypted and can be erased with /disconnect.</p>";
+          '<section class="state-card success"><div class="state-icon" aria-hidden="true">✓</div><p class="eyebrow">Connection complete</p><h1>VOLP connected</h1><p class="lede">You can return to Telegram now. The bot is loading your assignments and automatic re-login is enabled.</p><p class="note">Send <b>/disconnect</b> anytime to erase your saved credentials and assignment data.</p></section>';
       } catch (error) {
         status.textContent = "Login failed or VOLP is unavailable. Please try again later.";
-        status.className = "error";
+        status.className = "status error";
         button.disabled = false;
+        button.textContent = "Connect VOLP account";
       }
     });
     </script>`));
