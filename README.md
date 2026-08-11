@@ -2,6 +2,12 @@
 
 A free, shared Telegram bot that checks VOLP for pending assignments and sends deadline reminders.
 
+## Links
+
+- [Open the VOLP Assignment Reminder on Telegram](https://t.me/volp60000_bot)
+- [Fork this repository](https://github.com/nemesis0007/volp-telegram-reminder-bot/fork)
+- [Self-hosting guide](SELF_HOSTING.md)
+
 ## Host your own private bot
 
 Fork the repository to keep an independent copy under your GitHub account. Each
@@ -24,7 +30,7 @@ settings, and troubleshooting.
 
 ## Use the hosted bot
 
-[Open the VOLP Assignment Reminder in Telegram](https://volp-telegram-reminder-bot.nirajbots.workers.dev/bot), send `/start`, and connect VOLP using the private 15-minute link. No installation is required.
+[Open the VOLP Assignment Reminder in Telegram](https://t.me/volp60000_bot), send `/start`, and connect VOLP using the private 15-minute link. No installation is required.
 
 ## What users get
 
@@ -37,7 +43,7 @@ settings, and troubleshooting.
 - Immediate Telegram alerts when a three-hour check discovers new assignments
 - An 8:00 AM IST summary of unsubmitted assignments due within three days
 - Reminder delivery evaluated every 15 minutes
-- A personal reminder choice: 1 hour, 1.5 hours, or 2 hours before deadlines
+- A personal additional reminder choice from 1 to 10 hours before deadlines, plus the standard 1-hour reminder
 - Settings buttons with `/settings`
 - An in-bot privacy and project summary with `/about`
 - Encrypted password storage for automatic re-login
@@ -112,8 +118,7 @@ npx wrangler d1 execute volp-reminder-bot --remote --command "SELECT COUNT(*) AS
 - `/assignments` — list upcoming assignments
 - `/missed` — list overdue assignments that were not submitted
 - `/sync` — check VOLP immediately
-- `/settings` — choose a 1-hour, 1.5-hour, or 2-hour reminder
-- `/security` — view automatic re-login status
+- `/settings` — choose an additional reminder from 1 to 10 hours before the deadline
 - `/about` — view how the bot works, its privacy model, and source link
 - `/disconnect` — permanently delete stored credentials and assignment data
 
