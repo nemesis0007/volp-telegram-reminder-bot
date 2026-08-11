@@ -67,7 +67,7 @@ const SYNC_INTERVAL_MS = 3 * 60 * 60_000;
 const SYNC_DISPATCH_GRACE_MS = 5 * 60_000;
 const MAX_CONNECTED_ACCOUNTS = 90;
 const REPOSITORY_URL = "https://github.com/nemesis0007/volp-telegram-reminder-bot";
-const BOT_VERSION = "1.4.4";
+const BOT_VERSION = "1.4.5";
 const TELEMETRY_ORIGIN = "https://volp-telegram-reminder-bot.nirajbots.workers.dev";
 const TELEMETRY_ENDPOINT = `${TELEMETRY_ORIGIN}/telemetry/v1`;
 const TELEMETRY_INTERVAL_MS = 24 * 60 * 60_000;
@@ -1057,7 +1057,7 @@ async function startChunkedSync(env: Env, job: SyncRequestJob, force = false) {
         enqueuedAt,
         startedAt,
         courses.length,
-        job.manual ? 1 : 0,
+        job.manual || job.assignmentRefresh ? 1 : 0,
         job.initial ? 1 : 0
       ),
       ...courses.map((course, position) => env.DB.prepare(
@@ -1068,7 +1068,7 @@ async function startChunkedSync(env: Env, job: SyncRequestJob, force = false) {
     await env.DB.batch(statements);
     await enqueueSyncStep(
       env,
-      { chatId: job.chatId, runId, manual: job.manual, initial: job.initial, enqueuedAt },
+      { chatId: job.chatId, runId, manual: job.manual || job.assignmentRefresh, initial: job.initial, enqueuedAt },
       0,
       courses.length
     );
