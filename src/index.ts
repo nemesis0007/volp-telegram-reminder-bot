@@ -68,7 +68,7 @@ const SYNC_DISPATCH_GRACE_MS = 5 * 60_000;
 const MISSING_ASSIGNMENT_GRACE_MS = 24 * 60 * 60_000;
 const MAX_CONNECTED_ACCOUNTS = 90;
 const REPOSITORY_URL = "https://github.com/nemesis0007/volp-telegram-reminder-bot";
-const BOT_VERSION = "1.6.1";
+const BOT_VERSION = "1.6.2";
 const TELEMETRY_ORIGIN = "https://volp-telegram-reminder-bot.nirajbots.workers.dev";
 const TELEMETRY_ENDPOINT = `${TELEMETRY_ORIGIN}/telemetry/v1`;
 const TELEMETRY_INTERVAL_MS = 24 * 60 * 60_000;
@@ -880,7 +880,7 @@ async function handleCommand(env: Env, chatId: number, text: string, origin: str
     return send(
       env,
       chatId,
-      `ℹ️ <b>About VOLP Assignment Reminder</b>\n\nI check VOLP every 3 hours, list upcoming hands-on and subjective assignments, and remind each user at their chosen time.\n\nVOLP session tokens and passwords are encrypted. The saved password is used only for automatic re-login. Use /disconnect to erase all stored credentials and data.\n\nSelf-hosted copies send default-on daily anonymous usage totals: a random installation ID, bot version, registered-user count, and connected-account count. No user identities, credentials, assignments, or messages are sent. Operators can disable this in wrangler.jsonc.\n\nOpen-source and unaffiliated with VOLP or VIT.`,
+      `ℹ️ <b>About VOLP Assignment Reminder</b>\n\nI check VOLP every 3 hours, list upcoming hands-on and subjective assignments, and remind each user at their chosen time.\n\nVOLP session tokens and passwords are encrypted. The saved password is used only for automatic re-login. Use /disconnect to erase all stored credentials and data.`,
       { inline_keyboard: [[{ text: "View source code", url: REPOSITORY_URL }]] }
     );
   }
