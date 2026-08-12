@@ -68,7 +68,7 @@ const SYNC_DISPATCH_GRACE_MS = 5 * 60_000;
 const MISSING_ASSIGNMENT_GRACE_MS = 24 * 60 * 60_000;
 const MAX_CONNECTED_ACCOUNTS = 90;
 const REPOSITORY_URL = "https://github.com/nemesis0007/volp-telegram-reminder-bot";
-const BOT_VERSION = "1.5.8";
+const BOT_VERSION = "1.5.9";
 const TELEMETRY_ORIGIN = "https://volp-telegram-reminder-bot.nirajbots.workers.dev";
 const TELEMETRY_ENDPOINT = `${TELEMETRY_ORIGIN}/telemetry/v1`;
 const TELEMETRY_INTERVAL_MS = 24 * 60 * 60_000;
@@ -302,12 +302,13 @@ function parseDueDate(value: unknown): Date | null {
     const first = Number(volp[1]);
     const second = Number(volp[2]);
     if (first > 12 && second > 12) return null;
-    // VOLP mixes day/month and month/day values between assignment records.
-    // Prefer the learner-facing day/month convention when both are possible;
-    // a value above 12 identifies the day and makes the order unambiguous.
-    const monthFirst = second > 12;
-    const day = monthFirst ? second : first;
-    const month = monthFirst ? first : second;
+    // IMPORTANT: VOLP's assignment API is month/day/year. The VOLP UI and
+    // Telegram output are day/month/year, so the visible order is reversed.
+    // Keep ambiguous API values month-first; only fall back to day-first when
+    // the first value is above 12 and therefore cannot be a month.
+    const dayFirstFallback = first > 12;
+    const day = dayFirstFallback ? first : second;
+    const month = dayFirstFallback ? second : first;
     let hour = Number(volp[4] ?? 23);
     const marker = volp[7]?.toUpperCase();
     if (marker && (hour < 1 || hour > 12)) return null;
