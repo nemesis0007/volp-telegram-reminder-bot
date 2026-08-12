@@ -65,9 +65,10 @@ const DEFAULT_REMINDER_HOURS = 1;
 const REMINDER_HOUR_OPTIONS = Array.from({ length: 10 }, (_, index) => index + 1);
 const SYNC_INTERVAL_MS = 3 * 60 * 60_000;
 const SYNC_DISPATCH_GRACE_MS = 5 * 60_000;
+const MISSING_ASSIGNMENT_GRACE_MS = 24 * 60 * 60_000;
 const MAX_CONNECTED_ACCOUNTS = 90;
 const REPOSITORY_URL = "https://github.com/nemesis0007/volp-telegram-reminder-bot";
-const BOT_VERSION = "1.5.4";
+const BOT_VERSION = "1.5.6";
 const TELEMETRY_ORIGIN = "https://volp-telegram-reminder-bot.nirajbots.workers.dev";
 const TELEMETRY_ENDPOINT = `${TELEMETRY_ORIGIN}/telemetry/v1`;
 const TELEMETRY_INTERVAL_MS = 24 * 60 * 60_000;
@@ -900,6 +901,19 @@ function collectHandsOn(
   courseName: string,
   fallbackId: string | number
 ) {
+  if (courseName.toLowerCase().includes("blockchain")) {
+    console.log("volp-blockchain-handson", JSON.stringify({
+      fallbackId,
+      count: items.length,
+      items: items.map((item) => ({
+        id: item.ass_id ?? item.id ?? null,
+        dateFields: Object.fromEntries(
+          Object.entries(item).filter(([key]) => /due|date|deadline/i.test(key))
+        ),
+        parsed: parseDueDate(item.duedate)?.toISOString() ?? null
+      }))
+    }));
+  }
   for (const item of items) {
     const dueAt = parseDueDate(item.duedate);
     if (!dueAt || dueAt.getTime() < Date.now() - MISSED_ASSIGNMENT_RETENTION_MS) continue;
@@ -944,6 +958,16 @@ async function fetchCourseAssignments(course: any, session: VolpSession): Promis
     course.course_id ||
     course.course?.course_id ||
     course.course?.crsid;
+  if (courseName.toLowerCase().includes("blockchain")) {
+    console.log("volp-blockchain-outline", JSON.stringify({
+      courseId: courseId ?? null,
+      courseHands: content.course_level?.assigns?.hands?.length ?? 0,
+      units: (content.unit_level ?? []).map((unit: any) => ({
+        id: unit.unit_id ?? null,
+        hands: unit.assigns?.hands?.length ?? 0
+      }))
+    }));
+  }
   if (courseId && (content.course_level?.assigns?.hands?.length ?? 0) > 0) {
     const data = await postVolp(
       "https://learner.volp.in/HandOnAssignment/getHandsOnDetails",
@@ -956,14 +980,30 @@ async function fetchCourseAssignments(course: any, session: VolpSession): Promis
     );
     collectHandsOn(found, data.ass_list ?? [], courseName, courseId);
   }
-  for (const unit of content.unit_level ?? []) {
-    if (!(unit.assigns?.hands ?? []).length) continue;
+  const units = content.unit_level ?? [];
+  const queriedUnitIds = new Set<string>();
+  const fetchUnitHandsOn = async (unit: any) => {
+    if (unit.unit_id == null) return;
+    const unitId = String(unit.unit_id);
+    if (queriedUnitIds.has(unitId)) return;
+    queriedUnitIds.add(unitId);
     const data = await postVolp(
       "https://learner.volp.in/HandOnAssignment/getHandsOnDetails",
       { course_offering_learner_id: course.colid, outline: unit.unit_id, type: "content" },
       session, "/learner-handson-assignment"
     );
     collectHandsOn(found, data.ass_list ?? [], courseName, unit.unit_id);
+  };
+  for (const unit of units) {
+    if (!(unit.assigns?.hands ?? []).length) continue;
+    await fetchUnitHandsOn(unit);
+  }
+  // VOLP can remove a submitted unit assignment from the course outline even
+  // while its deadline is still in the future. If the advertised endpoints
+  // produced only past work, inspect the remaining units before concluding
+  // that the course has no upcoming assignments.
+  if (found.length > 0 && !found.some((assignment) => assignment.dueAt.getTime() > Date.now())) {
+    for (const unit of units) await fetchUnitHandsOn(unit);
   }
   if (courseId && (content.course_level?.assigns?.proj?.length ?? 0) > 0) {
     const subjective = await postVolp(
@@ -1321,7 +1361,7 @@ async function processSyncFinalizeJob(env: Env, job: SyncFinalizeJob) {
      FROM sync_run_assignments WHERE run_id=?`
   ).bind(job.runId).all<any>();
   const existing = await env.DB.prepare(
-    `SELECT assignment_key,title,course,assignment_type,due_at,submitted
+    `SELECT assignment_key,title,course,assignment_type,due_at,submitted,updated_at
      FROM assignments WHERE chat_id=?`
   ).bind(job.chatId).all<any>();
   const existingByKey = new Map(existing.results.map((item) => [item.assignment_key, item]));
@@ -1335,7 +1375,9 @@ async function processSyncFinalizeJob(env: Env, job: SyncFinalizeJob) {
         previous.assignment_type === item.assignment_type &&
         previous.due_at === item.due_at &&
         previous.submitted === item.submitted) {
-      return [];
+      return [env.DB.prepare(
+        "UPDATE assignments SET updated_at=? WHERE chat_id=? AND assignment_key=?"
+      ).bind(now, job.chatId, item.assignment_key)];
     }
     return [env.DB.prepare(
       `INSERT INTO assignments(chat_id,assignment_key,title,course,assignment_type,due_at,submitted,updated_at)
@@ -1361,7 +1403,8 @@ async function processSyncFinalizeJob(env: Env, job: SyncFinalizeJob) {
         !previous.submitted &&
         previousDue <= Date.now() &&
         previousDue >= Date.now() - MISSED_ASSIGNMENT_RETENTION_MS;
-      if (!missed) {
+      const recentlySeen = new Date(previous.updated_at).getTime() >= Date.now() - MISSING_ASSIGNMENT_GRACE_MS;
+      if (!missed && !(previousDue > Date.now() && recentlySeen)) {
         writes.push(
           env.DB.prepare("DELETE FROM assignments WHERE chat_id=? AND assignment_key=?")
             .bind(job.chatId, previous.assignment_key)
