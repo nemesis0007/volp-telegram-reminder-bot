@@ -68,7 +68,7 @@ const SYNC_DISPATCH_GRACE_MS = 5 * 60_000;
 const MISSING_ASSIGNMENT_GRACE_MS = 24 * 60 * 60_000;
 const MAX_CONNECTED_ACCOUNTS = 90;
 const REPOSITORY_URL = "https://github.com/nemesis0007/volp-telegram-reminder-bot";
-const BOT_VERSION = "1.5.9";
+const BOT_VERSION = "1.6.0";
 const TELEMETRY_ORIGIN = "https://volp-telegram-reminder-bot.nirajbots.workers.dev";
 const TELEMETRY_ENDPOINT = `${TELEMETRY_ORIGIN}/telemetry/v1`;
 const TELEMETRY_INTERVAL_MS = 24 * 60 * 60_000;
@@ -299,21 +299,16 @@ function parseDueDate(value: unknown): Date | null {
   const raw = String(value).trim();
   const volp = raw.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})(?:\s*,?\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?)?$/i);
   if (volp) {
-    const first = Number(volp[1]);
-    const second = Number(volp[2]);
-    if (first > 12 && second > 12) return null;
-    // IMPORTANT: VOLP's assignment API is month/day/year. The VOLP UI and
-    // Telegram output are day/month/year, so the visible order is reversed.
-    // Keep ambiguous API values month-first; only fall back to day-first when
-    // the first value is above 12 and therefore cannot be a month.
-    const dayFirstFallback = first > 12;
-    const day = dayFirstFallback ? first : second;
-    const month = dayFirstFallback ? second : first;
+    const day = Number(volp[1]);
+    const month = Number(volp[2]);
     let hour = Number(volp[4] ?? 23);
     const marker = volp[7]?.toUpperCase();
-    if (marker && (hour < 1 || hour > 12)) return null;
-    if (marker === "PM" && hour < 12) hour += 12;
-    if (marker === "AM" && hour === 12) hour = 0;
+    // VOLP sometimes appends AM/PM to an already 24-hour time (for example,
+    // "23:59 PM"). Apply the marker only to genuine 12-hour clock values.
+    if (marker && hour >= 1 && hour <= 12) {
+      if (marker === "PM" && hour < 12) hour += 12;
+      if (marker === "AM" && hour === 12) hour = 0;
+    }
     return istDate(
       Number(volp[3]), month, day,
       hour, Number(volp[5] ?? 59), Number(volp[6] ?? 0)
