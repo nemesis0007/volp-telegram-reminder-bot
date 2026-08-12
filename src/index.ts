@@ -67,7 +67,7 @@ const SYNC_INTERVAL_MS = 3 * 60 * 60_000;
 const SYNC_DISPATCH_GRACE_MS = 5 * 60_000;
 const MAX_CONNECTED_ACCOUNTS = 90;
 const REPOSITORY_URL = "https://github.com/nemesis0007/volp-telegram-reminder-bot";
-const BOT_VERSION = "1.5.2";
+const BOT_VERSION = "1.5.3";
 const TELEMETRY_ORIGIN = "https://volp-telegram-reminder-bot.nirajbots.workers.dev";
 const TELEMETRY_ENDPOINT = `${TELEMETRY_ORIGIN}/telemetry/v1`;
 const TELEMETRY_INTERVAL_MS = 24 * 60 * 60_000;
@@ -1013,6 +1013,30 @@ async function clearSyncEnqueued(env: Env, job: { chatId: number; enqueuedAt?: s
     .bind(job.chatId).run();
 }
 
+async function waitForRefreshedSession(
+  env: Env,
+  chatId: number,
+  previousEncryptedToken: string
+): Promise<{ session: VolpSession; encryptedToken: string } | null> {
+  for (let attempt = 0; attempt < 30; attempt++) {
+    if (attempt) await delay(500);
+    const latest = await env.DB.prepare(
+      "SELECT uid,encrypted_token FROM volp_accounts WHERE chat_id=?"
+    ).bind(chatId).first<{ uid: string; encrypted_token: string }>();
+    if (!latest) throw new Error("VOLP account is not connected");
+    if (latest.encrypted_token !== previousEncryptedToken) {
+      return {
+        session: {
+          token: await decryptSecret(latest.encrypted_token, env.CREDENTIAL_KEY),
+          uid: latest.uid
+        },
+        encryptedToken: latest.encrypted_token
+      };
+    }
+  }
+  return null;
+}
+
 async function withAccountSession<T>(
   env: Env,
   chatId: number,
@@ -1023,9 +1047,10 @@ async function withAccountSession<T>(
      FROM volp_accounts WHERE chat_id=?`
   ).bind(chatId).first<any>();
   if (!account) throw new Error("VOLP account is not connected");
+  let storedEncryptedToken = String(account.encrypted_token);
   try {
-    const originalToken = await decryptSecret(account.encrypted_token, env.CREDENTIAL_KEY);
-    let session = { token: originalToken, uid: account.uid };
+    let storedToken = await decryptSecret(storedEncryptedToken, env.CREDENTIAL_KEY);
+    let session = { token: storedToken, uid: account.uid };
     let reauthenticatedAt: string | null = null;
     let result: T;
     try {
@@ -1034,46 +1059,81 @@ async function withAccountSession<T>(
       const message = error instanceof Error ? error.message : "";
       if (!message.includes("session expired") || !account.auto_relogin || !account.encrypted_password) throw error;
 
-      const lastAttempt = account.last_reauth_at ? new Date(account.last_reauth_at).getTime() : 0;
-      if (Date.now() - lastAttempt < 15 * 60_000) {
-        throw new Error("VOLP session expired; automatic re-login is cooling down");
+      const latest = await env.DB.prepare(
+        "SELECT uid,encrypted_token,last_reauth_at FROM volp_accounts WHERE chat_id=?"
+      ).bind(chatId).first<{ uid: string; encrypted_token: string; last_reauth_at: string | null }>();
+      if (!latest) throw new Error("VOLP account is not connected");
+      if (latest.encrypted_token !== storedEncryptedToken) {
+        storedEncryptedToken = latest.encrypted_token;
+        storedToken = await decryptSecret(storedEncryptedToken, env.CREDENTIAL_KEY);
+        session = { token: storedToken, uid: latest.uid };
+        result = await operation(session);
+      } else {
+        const cutoff = new Date(Date.now() - 15 * 60_000).toISOString();
+        reauthenticatedAt = new Date().toISOString();
+        const claimed = await env.DB.prepare(
+          `UPDATE volp_accounts SET last_reauth_at=?
+           WHERE chat_id=? AND encrypted_token=?
+             AND (last_reauth_at IS NULL OR last_reauth_at<?)`
+        ).bind(reauthenticatedAt, chatId, storedEncryptedToken, cutoff).run();
+        if (claimed.meta.changes !== 1) {
+          const refreshed = await waitForRefreshedSession(env, chatId, storedEncryptedToken);
+          if (!refreshed) {
+            throw new Error("VOLP session expired; automatic re-login is cooling down");
+          }
+          storedEncryptedToken = refreshed.encryptedToken;
+          storedToken = refreshed.session.token;
+          session = refreshed.session;
+          reauthenticatedAt = null;
+          result = await operation(session);
+        } else {
+          const password = await decryptSecret(account.encrypted_password, env.CREDENTIAL_KEY);
+          const login = await postVolp(
+            "https://admin.volp.in/login/process",
+            { username: account.username, pwd: password }
+          );
+          if (login.flag !== "YES" || !login.token) {
+            throw new Error("VOLP automatic re-login failed. Use /connect to update the saved password.");
+          }
+          session = { token: String(login.token), uid: String(login.uid || account.uid) };
+          storedToken = session.token;
+          const refreshedEncryptedToken = await encryptSecret(storedToken, env.CREDENTIAL_KEY);
+          const published = await env.DB.prepare(
+            `UPDATE volp_accounts
+             SET uid=?,encrypted_token=?,last_error=NULL
+             WHERE chat_id=? AND encrypted_token=? AND last_reauth_at=?`
+          ).bind(session.uid, refreshedEncryptedToken, chatId, storedEncryptedToken, reauthenticatedAt).run();
+          if (published.meta.changes !== 1) {
+            throw new Error("VOLP account changed during automatic login");
+          }
+          storedEncryptedToken = refreshedEncryptedToken;
+          result = await operation(session);
+        }
       }
-      reauthenticatedAt = new Date().toISOString();
-      const claimed = await env.DB.prepare(
-        `UPDATE volp_accounts SET last_reauth_at=?
-         WHERE chat_id=? AND encrypted_token=?`
-      ).bind(reauthenticatedAt, chatId, account.encrypted_token).run();
-      if (claimed.meta.changes !== 1) throw new Error("VOLP account changed during automatic login");
-
-      const password = await decryptSecret(account.encrypted_password, env.CREDENTIAL_KEY);
-      const login = await postVolp(
-        "https://admin.volp.in/login/process",
-        { username: account.username, pwd: password }
-      );
-      if (login.flag !== "YES" || !login.token) {
-        throw new Error("VOLP automatic re-login failed. Use /connect to update the saved password.");
-      }
-      session = { token: String(login.token), uid: String(login.uid || account.uid) };
-      result = await operation(session);
     }
-    const encryptedToken = session.token === originalToken
-      ? account.encrypted_token
+    const encryptedToken = session.token === storedToken
+      ? storedEncryptedToken
       : await encryptSecret(session.token, env.CREDENTIAL_KEY);
     const accountUpdate = await env.DB.prepare(
       `UPDATE volp_accounts
        SET uid=?,encrypted_token=?,last_reauth_at=COALESCE(?,last_reauth_at),
            last_error=NULL
        WHERE chat_id=? AND encrypted_token=?`
-    ).bind(session.uid, encryptedToken, reauthenticatedAt, chatId, account.encrypted_token).run();
+    ).bind(session.uid, encryptedToken, reauthenticatedAt, chatId, storedEncryptedToken).run();
     if (accountUpdate.meta.changes !== 1) {
-      throw new Error("VOLP account changed during sync");
+      const current = await env.DB.prepare(
+        "SELECT uid FROM volp_accounts WHERE chat_id=?"
+      ).bind(chatId).first<{ uid: string }>();
+      if (!current || current.uid !== session.uid) {
+        throw new Error("VOLP account changed during sync");
+      }
     }
     return result;
   } catch (error) {
     const message = error instanceof Error ? error.message.slice(0, 200) : "Sync failed";
     await env.DB.prepare(
       "UPDATE volp_accounts SET last_error=? WHERE chat_id=? AND encrypted_token=?"
-    ).bind(message, chatId, account.encrypted_token).run();
+    ).bind(message, chatId, storedEncryptedToken).run();
     throw error;
   }
 }
