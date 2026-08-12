@@ -67,7 +67,7 @@ const SYNC_INTERVAL_MS = 3 * 60 * 60_000;
 const SYNC_DISPATCH_GRACE_MS = 5 * 60_000;
 const MAX_CONNECTED_ACCOUNTS = 90;
 const REPOSITORY_URL = "https://github.com/nemesis0007/volp-telegram-reminder-bot";
-const BOT_VERSION = "1.4.7";
+const BOT_VERSION = "1.5.0";
 const TELEMETRY_ORIGIN = "https://volp-telegram-reminder-bot.nirajbots.workers.dev";
 const TELEMETRY_ENDPOINT = `${TELEMETRY_ORIGIN}/telemetry/v1`;
 const TELEMETRY_INTERVAL_MS = 24 * 60 * 60_000;
@@ -1016,17 +1016,29 @@ async function withAccountSession<T>(
   }
 }
 
-async function enqueueSyncStep(
+async function enqueueSyncFinalizer(
   env: Env,
-  job: Pick<SyncCourseJob, "chatId" | "runId" | "manual" | "initial" | "enqueuedAt">,
-  position: number,
-  courseCount: number
+  job: Pick<SyncCourseJob, "chatId" | "runId" | "manual" | "initial" | "enqueuedAt">
 ) {
-  if (position < courseCount) {
-    await env.SYNC_QUEUE.send({ ...job, kind: "sync-course", position });
-    return;
+  const unfinished = await env.DB.prepare(
+    "SELECT COUNT(*) AS count FROM sync_run_courses WHERE run_id=? AND status<>'done'"
+  ).bind(job.runId).first<{ count: number }>();
+  if ((unfinished?.count ?? 0) > 0) return;
+
+  const claimed = await env.DB.prepare(
+    `UPDATE sync_runs SET finalize_enqueued=1
+     WHERE run_id=? AND chat_id=? AND status='running' AND finalize_enqueued=0`
+  ).bind(job.runId, job.chatId).run();
+  if (claimed.meta.changes !== 1) return;
+
+  try {
+    await env.SYNC_QUEUE.send({ ...job, kind: "sync-finalize" });
+  } catch (error) {
+    await env.DB.prepare(
+      "UPDATE sync_runs SET finalize_enqueued=0 WHERE run_id=? AND status='running'"
+    ).bind(job.runId).run();
+    throw error;
   }
-  await env.SYNC_QUEUE.send({ ...job, kind: "sync-finalize" });
 }
 
 async function startChunkedSync(env: Env, job: SyncRequestJob, force = false) {
@@ -1066,12 +1078,20 @@ async function startChunkedSync(env: Env, job: SyncRequestJob, force = false) {
       ).bind(runId, position, JSON.stringify(course)))
     ];
     await env.DB.batch(statements);
-    await enqueueSyncStep(
-      env,
-      { chatId: job.chatId, runId, manual: job.manual || job.assignmentRefresh, initial: job.initial, enqueuedAt },
-      0,
-      courses.length
-    );
+    const courseJob = {
+      chatId: job.chatId,
+      runId,
+      manual: job.manual || job.assignmentRefresh,
+      initial: job.initial,
+      enqueuedAt
+    };
+    if (courses.length) {
+      await env.SYNC_QUEUE.sendBatch(courses.map((_, position) => ({
+        body: { ...courseJob, kind: "sync-course" as const, position }
+      })));
+    } else {
+      await enqueueSyncFinalizer(env, courseJob);
+    }
     return true;
   } finally {
     await releaseSyncLock(env, job.chatId);
@@ -1087,7 +1107,7 @@ async function processSyncCourseJob(env: Env, job: SyncCourseJob) {
     "SELECT course_json,status FROM sync_run_courses WHERE run_id=? AND position=?"
   ).bind(job.runId, job.position).first<{ course_json: string; status: string }>();
   if (!courseRow) {
-    await enqueueSyncStep(env, job, run.course_count, run.course_count);
+    await enqueueSyncFinalizer(env, job);
     return;
   }
   if (courseRow.status !== "done") {
@@ -1118,7 +1138,7 @@ async function processSyncCourseJob(env: Env, job: SyncCourseJob) {
     ).bind(job.runId, job.position));
     await env.DB.batch(writes);
   }
-  await enqueueSyncStep(env, job, job.position + 1, run.course_count);
+  await enqueueSyncFinalizer(env, job);
 }
 
 async function notifyCompletedSyncRun(

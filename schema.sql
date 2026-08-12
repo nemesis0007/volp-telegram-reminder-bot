@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS sync_runs (
   started_at TEXT NOT NULL,
   completed_at TEXT,
   completion_notified_at TEXT,
+  finalize_enqueued INTEGER NOT NULL DEFAULT 0 CHECK(finalize_enqueued IN (0, 1)),
   status TEXT NOT NULL CHECK(status IN ('running', 'completed', 'failed', 'cancelled')),
   course_count INTEGER NOT NULL CHECK(course_count >= 0),
   manual INTEGER NOT NULL DEFAULT 0 CHECK(manual IN (0, 1)),
