@@ -68,7 +68,7 @@ const SYNC_DISPATCH_GRACE_MS = 5 * 60_000;
 const MISSING_ASSIGNMENT_GRACE_MS = 24 * 60 * 60_000;
 const MAX_CONNECTED_ACCOUNTS = 90;
 const REPOSITORY_URL = "https://github.com/nemesis0007/volp-telegram-reminder-bot";
-const BOT_VERSION = "1.5.6";
+const BOT_VERSION = "1.5.7";
 const TELEMETRY_ORIGIN = "https://volp-telegram-reminder-bot.nirajbots.workers.dev";
 const TELEMETRY_ENDPOINT = `${TELEMETRY_ORIGIN}/telemetry/v1`;
 const TELEMETRY_INTERVAL_MS = 24 * 60 * 60_000;
@@ -299,13 +299,21 @@ function parseDueDate(value: unknown): Date | null {
   const raw = String(value).trim();
   const volp = raw.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})(?:\s*,?\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?)?$/i);
   if (volp) {
+    const first = Number(volp[1]);
+    const second = Number(volp[2]);
+    if (first > 12 && second > 12) return null;
+    // VOLP's API normally emits month/day/year, while a few endpoints emit
+    // day/month/year. An unambiguous value above 12 identifies the day;
+    // ambiguous values retain the API's established month-first behavior.
+    const day = first > 12 ? first : second;
+    const month = first > 12 ? second : first;
     let hour = Number(volp[4] ?? 23);
     const marker = volp[7]?.toUpperCase();
     if (marker && (hour < 1 || hour > 12)) return null;
     if (marker === "PM" && hour < 12) hour += 12;
     if (marker === "AM" && hour === 12) hour = 0;
     return istDate(
-      Number(volp[3]), Number(volp[2]), Number(volp[1]),
+      Number(volp[3]), month, day,
       hour, Number(volp[5] ?? 59), Number(volp[6] ?? 0)
     );
   }
@@ -901,19 +909,6 @@ function collectHandsOn(
   courseName: string,
   fallbackId: string | number
 ) {
-  if (courseName.toLowerCase().includes("blockchain")) {
-    console.log("volp-blockchain-handson", JSON.stringify({
-      fallbackId,
-      count: items.length,
-      items: items.map((item) => ({
-        id: item.ass_id ?? item.id ?? null,
-        dateFields: Object.fromEntries(
-          Object.entries(item).filter(([key]) => /due|date|deadline/i.test(key))
-        ),
-        parsed: parseDueDate(item.duedate)?.toISOString() ?? null
-      }))
-    }));
-  }
   for (const item of items) {
     const dueAt = parseDueDate(item.duedate);
     if (!dueAt || dueAt.getTime() < Date.now() - MISSED_ASSIGNMENT_RETENTION_MS) continue;
@@ -958,16 +953,6 @@ async function fetchCourseAssignments(course: any, session: VolpSession): Promis
     course.course_id ||
     course.course?.course_id ||
     course.course?.crsid;
-  if (courseName.toLowerCase().includes("blockchain")) {
-    console.log("volp-blockchain-outline", JSON.stringify({
-      courseId: courseId ?? null,
-      courseHands: content.course_level?.assigns?.hands?.length ?? 0,
-      units: (content.unit_level ?? []).map((unit: any) => ({
-        id: unit.unit_id ?? null,
-        hands: unit.assigns?.hands?.length ?? 0
-      }))
-    }));
-  }
   if (courseId && (content.course_level?.assigns?.hands?.length ?? 0) > 0) {
     const data = await postVolp(
       "https://learner.volp.in/HandOnAssignment/getHandsOnDetails",
