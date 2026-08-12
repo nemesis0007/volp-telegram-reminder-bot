@@ -67,7 +67,7 @@ const SYNC_INTERVAL_MS = 3 * 60 * 60_000;
 const SYNC_DISPATCH_GRACE_MS = 5 * 60_000;
 const MAX_CONNECTED_ACCOUNTS = 90;
 const REPOSITORY_URL = "https://github.com/nemesis0007/volp-telegram-reminder-bot";
-const BOT_VERSION = "1.5.0";
+const BOT_VERSION = "1.5.1";
 const TELEMETRY_ORIGIN = "https://volp-telegram-reminder-bot.nirajbots.workers.dev";
 const TELEMETRY_ENDPOINT = `${TELEMETRY_ORIGIN}/telemetry/v1`;
 const TELEMETRY_INTERVAL_MS = 24 * 60 * 60_000;
@@ -244,19 +244,53 @@ function stripHtml(value: unknown) {
   return decodeHtmlEntities(String(value ?? "").replace(/<[^>]*>/g, " ")).replace(/\s+/g, " ").trim();
 }
 
+function istDate(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  second: number
+) {
+  if (
+    month < 1 || month > 12 || day < 1 || day > 31 ||
+    hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59
+  ) return null;
+  const wallClock = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+  if (
+    wallClock.getUTCFullYear() !== year || wallClock.getUTCMonth() !== month - 1 ||
+    wallClock.getUTCDate() !== day || wallClock.getUTCHours() !== hour ||
+    wallClock.getUTCMinutes() !== minute || wallClock.getUTCSeconds() !== second
+  ) return null;
+  return new Date(wallClock.getTime() - 330 * 60_000);
+}
+
 function parseDueDate(value: unknown): Date | null {
   if (!value) return null;
   const raw = String(value).trim();
-  const direct = new Date(raw);
-  if (!Number.isNaN(direct.getTime())) return direct;
-  const match = raw.match(/(\d{1,2})[/-](\d{1,2})[/-](\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?)?/i);
-  if (!match) return null;
-  let hour = Number(match[4] ?? 23);
-  const marker = match[7]?.toUpperCase();
-  if (marker === "PM" && hour < 12) hour += 12;
-  if (marker === "AM" && hour === 12) hour = 0;
-  // VOLP dates are interpreted as IST.
-  return new Date(Date.UTC(Number(match[3]), Number(match[2]) - 1, Number(match[1]), hour - 5, Number(match[5] ?? 59) - 30, Number(match[6] ?? 0)));
+  const volp = raw.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})(?:\s*,?\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?)?$/i);
+  if (volp) {
+    let hour = Number(volp[4] ?? 23);
+    const marker = volp[7]?.toUpperCase();
+    if (marker && (hour < 1 || hour > 12)) return null;
+    if (marker === "PM" && hour < 12) hour += 12;
+    if (marker === "AM" && hour === 12) hour = 0;
+    return istDate(
+      Number(volp[3]), Number(volp[2]), Number(volp[1]),
+      hour, Number(volp[5] ?? 59), Number(volp[6] ?? 0)
+    );
+  }
+
+  const iso = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T\s](\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?$/i);
+  if (!iso) return null;
+  if (iso[7]) {
+    const direct = new Date(raw);
+    return Number.isNaN(direct.getTime()) ? null : direct;
+  }
+  return istDate(
+    Number(iso[1]), Number(iso[2]), Number(iso[3]),
+    Number(iso[4] ?? 23), Number(iso[5] ?? 59), Number(iso[6] ?? 0)
+  );
 }
 
 function volpHeaders(session?: VolpSession, route = "/") {
