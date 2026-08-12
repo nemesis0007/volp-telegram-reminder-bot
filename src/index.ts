@@ -67,7 +67,7 @@ const SYNC_INTERVAL_MS = 3 * 60 * 60_000;
 const SYNC_DISPATCH_GRACE_MS = 5 * 60_000;
 const MAX_CONNECTED_ACCOUNTS = 90;
 const REPOSITORY_URL = "https://github.com/nemesis0007/volp-telegram-reminder-bot";
-const BOT_VERSION = "1.5.1";
+const BOT_VERSION = "1.5.2";
 const TELEMETRY_ORIGIN = "https://volp-telegram-reminder-bot.nirajbots.workers.dev";
 const TELEMETRY_ENDPOINT = `${TELEMETRY_ORIGIN}/telemetry/v1`;
 const TELEMETRY_INTERVAL_MS = 24 * 60 * 60_000;
@@ -242,6 +242,34 @@ function decodeHtmlEntities(value: string) {
 
 function stripHtml(value: unknown) {
   return decodeHtmlEntities(String(value ?? "").replace(/<[^>]*>/g, " ")).replace(/\s+/g, " ").trim();
+}
+
+function trueVolpFlag(value: unknown) {
+  if (value === true || value === 1) return true;
+  if (typeof value !== "string") return false;
+  return ["1", "true", "yes", "submitted", "completed", "evaluated", "uploaded"]
+    .includes(value.trim().toLowerCase());
+}
+
+function completeVolpPercentage(value: unknown) {
+  if (typeof value === "number") return Number.isFinite(value) && value >= 100;
+  if (typeof value !== "string") return false;
+  const parsed = Number.parseFloat(value.replace("%", "").trim());
+  return Number.isFinite(parsed) && parsed >= 100;
+}
+
+function handsOnSubmitted(item: any) {
+  const filePath = item.filePath ?? item.filepath ?? item.file_path ?? item.uploaded_file;
+  if (typeof filePath === "string" && filePath.trim()) return true;
+  if ([
+    item.isevaluated, item.isEvaluated, item.issubmitted, item.isSubmitted,
+    item.is_submitted, item.submitted, item.isuploaded, item.isUploaded
+  ].some(trueVolpFlag)) return true;
+  if ([item.status, item.submission_status, item.assignment_status].some(trueVolpFlag)) return true;
+  return [
+    item.progress, item.percentage, item.percent, item.completion_percentage,
+    item.assignment_percentage, item.submission_percentage
+  ].some(completeVolpPercentage);
 }
 
 function istDate(
@@ -882,7 +910,7 @@ function collectHandsOn(
       course: courseName,
       type: "Hands-on",
       dueAt,
-      submitted: Boolean(item.filePath || item.isevaluated)
+      submitted: handsOnSubmitted(item)
     });
   }
 }
