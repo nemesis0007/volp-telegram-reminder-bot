@@ -67,7 +67,7 @@ const SYNC_INTERVAL_MS = 3 * 60 * 60_000;
 const SYNC_DISPATCH_GRACE_MS = 5 * 60_000;
 const MAX_CONNECTED_ACCOUNTS = 90;
 const REPOSITORY_URL = "https://github.com/nemesis0007/volp-telegram-reminder-bot";
-const BOT_VERSION = "1.5.3";
+const BOT_VERSION = "1.5.4";
 const TELEMETRY_ORIGIN = "https://volp-telegram-reminder-bot.nirajbots.workers.dev";
 const TELEMETRY_ENDPOINT = `${TELEMETRY_ORIGIN}/telemetry/v1`;
 const TELEMETRY_INTERVAL_MS = 24 * 60 * 60_000;
@@ -1163,6 +1163,19 @@ async function enqueueSyncFinalizer(
   }
 }
 
+async function enqueueNextSyncCourse(
+  env: Env,
+  job: Pick<SyncCourseJob, "chatId" | "runId" | "manual" | "initial" | "enqueuedAt">,
+  position: number,
+  courseCount: number
+) {
+  if (position < courseCount) {
+    await env.SYNC_QUEUE.send({ ...job, kind: "sync-course", position });
+    return;
+  }
+  await enqueueSyncFinalizer(env, job);
+}
+
 async function startChunkedSync(env: Env, job: SyncRequestJob, force = false) {
   if (!(await acquireSyncLock(env, job.chatId))) {
     throw new Error("VOLP sync already in progress");
@@ -1207,13 +1220,7 @@ async function startChunkedSync(env: Env, job: SyncRequestJob, force = false) {
       initial: job.initial,
       enqueuedAt
     };
-    if (courses.length) {
-      await env.SYNC_QUEUE.sendBatch(courses.map((_, position) => ({
-        body: { ...courseJob, kind: "sync-course" as const, position }
-      })));
-    } else {
-      await enqueueSyncFinalizer(env, courseJob);
-    }
+    await enqueueNextSyncCourse(env, courseJob, 0, courses.length);
     return true;
   } finally {
     await releaseSyncLock(env, job.chatId);
@@ -1229,7 +1236,7 @@ async function processSyncCourseJob(env: Env, job: SyncCourseJob) {
     "SELECT course_json,status FROM sync_run_courses WHERE run_id=? AND position=?"
   ).bind(job.runId, job.position).first<{ course_json: string; status: string }>();
   if (!courseRow) {
-    await enqueueSyncFinalizer(env, job);
+    await enqueueNextSyncCourse(env, job, job.position + 1, run.course_count);
     return;
   }
   if (courseRow.status !== "done") {
@@ -1260,7 +1267,7 @@ async function processSyncCourseJob(env: Env, job: SyncCourseJob) {
     ).bind(job.runId, job.position));
     await env.DB.batch(writes);
   }
-  await enqueueSyncFinalizer(env, job);
+  await enqueueNextSyncCourse(env, job, job.position + 1, run.course_count);
 }
 
 async function notifyCompletedSyncRun(
