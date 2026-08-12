@@ -68,7 +68,7 @@ const SYNC_DISPATCH_GRACE_MS = 5 * 60_000;
 const MISSING_ASSIGNMENT_GRACE_MS = 24 * 60 * 60_000;
 const MAX_CONNECTED_ACCOUNTS = 90;
 const REPOSITORY_URL = "https://github.com/nemesis0007/volp-telegram-reminder-bot";
-const BOT_VERSION = "1.6.0";
+const BOT_VERSION = "1.6.1";
 const TELEMETRY_ORIGIN = "https://volp-telegram-reminder-bot.nirajbots.workers.dev";
 const TELEMETRY_ENDPOINT = `${TELEMETRY_ORIGIN}/telemetry/v1`;
 const TELEMETRY_INTERVAL_MS = 24 * 60 * 60_000;
@@ -662,14 +662,14 @@ async function showAssignmentsAndRefresh(env: Env, chatId: number) {
 }
 
 async function deliverSyncResult(env: Env, chatId: number, initial = false) {
-  return send(
+  await send(
     env,
     chatId,
     initial
       ? "✅ Your assignments are loaded. I’ll now check VOLP every 3 hours."
-      : "✅ VOLP sync finished. Your assignment data is up to date.",
-    { inline_keyboard: [[{ text: "View assignments 📚", callback_data: "assignments:view" }]] }
+      : "✅ VOLP sync finished. Your assignment data is up to date."
   );
+  return sendAssignments(env, chatId);
 }
 
 async function sendMissedAssignments(env: Env, chatId: number) {
