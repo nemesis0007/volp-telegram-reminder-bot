@@ -70,7 +70,7 @@ const SYNC_DISPATCH_GRACE_MS = 5 * 60_000;
 const MISSING_ASSIGNMENT_GRACE_MS = 24 * 60 * 60_000;
 const MAX_CONNECTED_ACCOUNTS = 90;
 const REPOSITORY_URL = "https://github.com/nemesis0007/volp-telegram-reminder-bot";
-const BOT_VERSION = "1.7.0";
+const BOT_VERSION = "1.7.1";
 const TELEMETRY_ORIGIN = "https://volp-telegram-reminder-bot.nirajbots.workers.dev";
 const TELEMETRY_ENDPOINT = `${TELEMETRY_ORIGIN}/telemetry/v1`;
 const TELEMETRY_INTERVAL_MS = 24 * 60 * 60_000;
@@ -481,7 +481,7 @@ async function hasConnectionCapacity(env: Env, chatId: number) {
   return (count?.count ?? 0) < MAX_CONNECTED_ACCOUNTS;
 }
 
-function reminderKeyboard(current?: number, digestDays = DEFAULT_DIGEST_DAYS) {
+function reminderHourKeyboard(current?: number) {
   return {
     inline_keyboard: [
       ...[0, 5].map((start) =>
@@ -489,9 +489,16 @@ function reminderKeyboard(current?: number, digestDays = DEFAULT_DIGEST_DAYS) {
           text: `${hours}h${current === hours ? " ✓" : ""}`,
           callback_data: `reminder_hours:${hours}`
         }))
-      ),
+      )
+    ]
+  };
+}
+
+function digestDayKeyboard(current = DEFAULT_DIGEST_DAYS) {
+  return {
+    inline_keyboard: [
       DIGEST_DAY_OPTIONS.map((days) => ({
-        text: `☀️ ${days}d${digestDays === days ? " ✓" : ""}`,
+        text: `☀️ ${days}d${current === days ? " ✓" : ""}`,
         callback_data: `digest_days:${days}`
       }))
     ]
@@ -504,11 +511,17 @@ async function showSettings(env: Env, chatId: number) {
   ).bind(chatId).first<{ reminder_hours: number; digest_days: number }>();
   const current = user?.reminder_hours ?? DEFAULT_REMINDER_HOURS;
   const digestDays = user?.digest_days ?? DEFAULT_DIGEST_DAYS;
+  await send(
+    env,
+    chatId,
+    `⏰ <b>Additional deadline reminder</b>\n\nEveryone automatically receives a reminder <b>1 hour before every assignment deadline</b>.\n\nChoose when you want one <b>additional reminder</b>, from 1 to 10 hours before the deadline. For example, choosing 6h means you receive alerts 6 hours before and again 1 hour before.\n\nYour current choice: <b>${current}h before</b>.${current === 1 ? " Because this matches the standard reminder, only one alert is sent." : ""}`,
+    reminderHourKeyboard(current)
+  );
   return send(
     env,
     chatId,
-    `⚙️ <b>Reminder timing</b>\n\nEveryone receives a reminder <b>1 hour before the deadline</b>.\n\nYour custom reminder: <b>${current} hour${current === 1 ? "" : "s"} before</b>.${current === 1 ? " This is combined with the standard 1-hour reminder, so you receive it only once." : ""}\n\nYour 8:00 AM reminder includes assignments due within the next <b>${digestDays} day${digestDays === 1 ? "" : "s"}</b>.\n\nChoose 1–10 hours and 1–5 days:`,
-    reminderKeyboard(current, digestDays)
+    `☀️ <b>8:00 AM upcoming-assignment reminder</b>\n\nChoose how many days ahead the bot should check each morning at <b>8:00 AM</b>.\n\nFor example, choosing 3d means the 8:00 AM message includes assignments due within the next 3 days. This morning reminder does not replace your deadline reminders.\n\nYour current choice: <b>${digestDays} day${digestDays === 1 ? "" : "s"}</b>.`,
+    digestDayKeyboard(digestDays)
   );
 }
 
@@ -1819,9 +1832,9 @@ async function connectSession(request: Request, env: Env) {
       claimedSetup.chat_id,
       `${accountChanged ? "🔄 VOLP account switched." : "✅ VOLP connected."} Automatic re-login is enabled with encrypted password storage.\n\n${initialSyncQueued
         ? "I’ve queued your first assignment sync and will message you when it finishes. After that, I’ll check every 3 hours."
-        : "I couldn’t queue your first assignment sync. Please send /sync in Telegram."}\n\n⏰ <b>Choose your reminder settings below</b>.\n\n• Hour buttons: an additional reminder 1–10 hours before the deadline.\n• Day buttons: the 8:00 AM reminder window, 1–5 days before.\n• Everyone also receives the standard 1-hour reminder.`,
-      reminderKeyboard(DEFAULT_REMINDER_HOURS, DEFAULT_DIGEST_DAYS)
+        : "I couldn’t queue your first assignment sync. Please send /sync in Telegram."}`
     );
+    await showSettings(env, claimedSetup.chat_id);
     return json({ ok: true });
   } catch (error) {
     if (error instanceof Error && error.message.includes("BOT_CAPACITY_REACHED")) {
