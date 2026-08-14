@@ -63,12 +63,14 @@ const BASE_HEADERS: Record<string, string> = {
 };
 const DEFAULT_REMINDER_HOURS = 1;
 const REMINDER_HOUR_OPTIONS = Array.from({ length: 10 }, (_, index) => index + 1);
+const DEFAULT_DIGEST_DAYS = 3;
+const DIGEST_DAY_OPTIONS = Array.from({ length: 5 }, (_, index) => index + 1);
 const SYNC_INTERVAL_MS = 3 * 60 * 60_000;
 const SYNC_DISPATCH_GRACE_MS = 5 * 60_000;
 const MISSING_ASSIGNMENT_GRACE_MS = 24 * 60 * 60_000;
 const MAX_CONNECTED_ACCOUNTS = 90;
 const REPOSITORY_URL = "https://github.com/nemesis0007/volp-telegram-reminder-bot";
-const BOT_VERSION = "1.6.2";
+const BOT_VERSION = "1.7.0";
 const TELEMETRY_ORIGIN = "https://volp-telegram-reminder-bot.nirajbots.workers.dev";
 const TELEMETRY_ENDPOINT = `${TELEMETRY_ORIGIN}/telemetry/v1`;
 const TELEMETRY_INTERVAL_MS = 24 * 60 * 60_000;
@@ -479,25 +481,34 @@ async function hasConnectionCapacity(env: Env, chatId: number) {
   return (count?.count ?? 0) < MAX_CONNECTED_ACCOUNTS;
 }
 
-function reminderKeyboard(current?: number) {
+function reminderKeyboard(current?: number, digestDays = DEFAULT_DIGEST_DAYS) {
   return {
-    inline_keyboard: [0, 5].map((start) =>
-      REMINDER_HOUR_OPTIONS.slice(start, start + 5).map((hours) => ({
-        text: `${hours}h${current === hours ? " ✓" : ""}`,
-        callback_data: `reminder_hours:${hours}`
+    inline_keyboard: [
+      ...[0, 5].map((start) =>
+        REMINDER_HOUR_OPTIONS.slice(start, start + 5).map((hours) => ({
+          text: `${hours}h${current === hours ? " ✓" : ""}`,
+          callback_data: `reminder_hours:${hours}`
+        }))
+      ),
+      DIGEST_DAY_OPTIONS.map((days) => ({
+        text: `☀️ ${days}d${digestDays === days ? " ✓" : ""}`,
+        callback_data: `digest_days:${days}`
       }))
-    )
+    ]
   };
 }
 
 async function showSettings(env: Env, chatId: number) {
-  const user = await env.DB.prepare("SELECT reminder_hours FROM users WHERE chat_id=?").bind(chatId).first<{ reminder_hours: number }>();
+  const user = await env.DB.prepare(
+    "SELECT reminder_hours,digest_days FROM users WHERE chat_id=?"
+  ).bind(chatId).first<{ reminder_hours: number; digest_days: number }>();
   const current = user?.reminder_hours ?? DEFAULT_REMINDER_HOURS;
+  const digestDays = user?.digest_days ?? DEFAULT_DIGEST_DAYS;
   return send(
     env,
     chatId,
-    `⚙️ <b>Reminder timing</b>\n\nEveryone receives a reminder <b>1 hour before the deadline</b>.\n\nYour selected reminder: <b>${current} hour${current === 1 ? "" : "s"} before</b>.${current === 1 ? " This is combined with the standard 1-hour reminder, so you receive it only once." : ""}\n\nChoose any time from 1 to 10 hours:`,
-    reminderKeyboard(current)
+    `⚙️ <b>Reminder timing</b>\n\nEveryone receives a reminder <b>1 hour before the deadline</b>.\n\nYour custom reminder: <b>${current} hour${current === 1 ? "" : "s"} before</b>.${current === 1 ? " This is combined with the standard 1-hour reminder, so you receive it only once." : ""}\n\nYour 8:00 AM reminder includes assignments due within the next <b>${digestDays} day${digestDays === 1 ? "" : "s"}</b>.\n\nChoose 1–10 hours and 1–5 days:`,
+    reminderKeyboard(current, digestDays)
   );
 }
 
@@ -529,6 +540,23 @@ async function handleCallback(env: Env, callback: any) {
   if (data === "assignments:view") {
     await telegram(env, "answerCallbackQuery", { callback_query_id: callback.id });
     return sendAssignments(env, chatId);
+  }
+  const digestMatch = data.match(/^digest_days:([1-5])$/);
+  if (digestMatch) {
+    const days = Number(digestMatch[1]);
+    await env.DB.prepare(
+      `INSERT INTO users(chat_id,created_at,digest_days) VALUES(?,?,?)
+       ON CONFLICT(chat_id) DO UPDATE SET digest_days=excluded.digest_days`
+    ).bind(chatId, new Date().toISOString(), days).run();
+    await telegram(env, "answerCallbackQuery", {
+      callback_query_id: callback.id,
+      text: `8:00 AM reminder set to ${days} day${days === 1 ? "" : "s"}`
+    });
+    return send(
+      env,
+      chatId,
+      `✅ Your <b>8:00 AM reminder</b> will include assignments due within the next <b>${days} day${days === 1 ? "" : "s"}</b>.`
+    );
   }
   const match = data.match(/^reminder_hours:([1-9]|10)$/);
   if (!match) {
@@ -757,7 +785,7 @@ function isVolpMaintenanceWindow(now = new Date()) {
   return ist.hour * 60 + ist.minute < VOLP_MAINTENANCE_END_MINUTE_IST;
 }
 
-async function sendDailyDigest(env: Env, chatId: number, digestDate: string) {
+async function sendDailyDigest(env: Env, chatId: number, digestDate: string, digestDays: number) {
   const claimed = await env.DB.prepare(
     "INSERT OR IGNORE INTO daily_digest_log(chat_id,digest_date,sent_at) VALUES(?,?,?)"
   ).bind(chatId, digestDate, new Date().toISOString()).run();
@@ -769,7 +797,11 @@ async function sendDailyDigest(env: Env, chatId: number, digestDate: string) {
       `SELECT title,course,due_at FROM assignments
        WHERE chat_id=? AND submitted=0 AND due_at>? AND due_at<=?
        ORDER BY due_at`
-    ).bind(chatId, now.toISOString(), new Date(now.getTime() + 72 * 60 * 60_000).toISOString()).all<any>();
+    ).bind(
+      chatId,
+      now.toISOString(),
+      new Date(now.getTime() + digestDays * 24 * 60 * 60_000).toISOString()
+    ).all<any>();
     if (!rows.results.length) {
       return;
     }
@@ -780,11 +812,11 @@ async function sendDailyDigest(env: Env, chatId: number, digestDate: string) {
       `${new Date(assignment.due_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}`
     );
     const messages: string[] = [];
-    let message = "☀️ <b>Due within the next 3 days</b>";
+    let message = `☀️ <b>Due within the next ${digestDays} day${digestDays === 1 ? "" : "s"}</b>`;
     for (const entry of entries) {
       if (`${message}\n\n${entry}`.length > 3_800) {
         messages.push(message);
-        message = "☀️ <b>Due within the next 3 days (continued)</b>";
+        message = `☀️ <b>Due within the next ${digestDays} day${digestDays === 1 ? "" : "s"} (continued)</b>`;
       }
       message += `\n\n${entry}`;
     }
@@ -1469,6 +1501,7 @@ async function sendConfiguredReminders(env: Env, chatId: number, selectedHours: 
 type ScheduledAccount = {
   chat_id: number;
   reminder_hours: number;
+  digest_days: number;
   auto_relogin: number;
   last_error: string | null;
   last_sync_at: string | null;
@@ -1507,9 +1540,10 @@ async function runScheduled(env: Env) {
   const istNow = istDateAndHour();
   const accounts = await env.DB.prepare(
     `SELECT a.chat_id, a.last_sync_at, a.last_error, a.auto_relogin,
-            COALESCE(u.reminder_hours, ?) AS reminder_hours
+            COALESCE(u.reminder_hours, ?) AS reminder_hours,
+            COALESCE(u.digest_days, ?) AS digest_days
      FROM volp_accounts a LEFT JOIN users u ON u.chat_id=a.chat_id`
-  ).bind(DEFAULT_REMINDER_HOURS).all<ScheduledAccount & { sync_enqueued_at: string | null }>();
+  ).bind(DEFAULT_REMINDER_HOURS, DEFAULT_DIGEST_DAYS).all<ScheduledAccount & { sync_enqueued_at: string | null }>();
 
   if (!isVolpMaintenanceWindow()) {
     const due = await env.DB.prepare(
@@ -1548,7 +1582,7 @@ async function runScheduled(env: Env) {
     }
     if (istNow.hour === 8) {
       try {
-        await sendDailyDigest(env, account.chat_id, istNow.date);
+        await sendDailyDigest(env, account.chat_id, istNow.date, account.digest_days);
       } catch {
         // The next cron invocation within the hour can retry this user's digest.
       }
@@ -1785,8 +1819,8 @@ async function connectSession(request: Request, env: Env) {
       claimedSetup.chat_id,
       `${accountChanged ? "🔄 VOLP account switched." : "✅ VOLP connected."} Automatic re-login is enabled with encrypted password storage.\n\n${initialSyncQueued
         ? "I’ve queued your first assignment sync and will message you when it finishes. After that, I’ll check every 3 hours."
-        : "I couldn’t queue your first assignment sync. Please send /sync in Telegram."}\n\n⏰ <b>Choose an additional reminder time below</b> (1–10 hours before the deadline). Everyone also receives the standard 1-hour reminder. Choosing 1h sends only one alert.`,
-      reminderKeyboard(DEFAULT_REMINDER_HOURS)
+        : "I couldn’t queue your first assignment sync. Please send /sync in Telegram."}\n\n⏰ <b>Choose your reminder settings below</b>.\n\n• Hour buttons: an additional reminder 1–10 hours before the deadline.\n• Day buttons: the 8:00 AM reminder window, 1–5 days before.\n• Everyone also receives the standard 1-hour reminder.`,
+      reminderKeyboard(DEFAULT_REMINDER_HOURS, DEFAULT_DIGEST_DAYS)
     );
     return json({ ok: true });
   } catch (error) {

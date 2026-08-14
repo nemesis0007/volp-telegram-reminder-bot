@@ -1,6 +1,6 @@
 {
   "name": "volp-telegram-reminder-bot",
-  "version": "1.6.2",
+  "version": "1.7.0",
   "private": true,
   "scripts": {
     "typecheck": "tsc --noEmit",
