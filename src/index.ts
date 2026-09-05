@@ -66,6 +66,7 @@ const REMINDER_HOUR_OPTIONS = Array.from({ length: 10 }, (_, index) => index + 1
 const DEFAULT_DIGEST_DAYS = 3;
 const DIGEST_DAY_OPTIONS = Array.from({ length: 5 }, (_, index) => index + 1);
 const SYNC_INTERVAL_MS = 3 * 60 * 60_000;
+const ASSIGNMENT_REFRESH_FRESHNESS_MS = 10 * 60_000;
 const SYNC_DISPATCH_GRACE_MS = 5 * 60_000;
 const MISSING_ASSIGNMENT_GRACE_MS = 24 * 60 * 60_000;
 const MAX_CONNECTED_ACCOUNTS = 90;
@@ -675,6 +676,10 @@ async function showAssignmentsAndRefresh(env: Env, chatId: number) {
 
   // Reply from D1 first so a slow VOLP request never delays the assignments button.
   await sendAssignments(env, chatId);
+
+  // Repeated views reuse a recent successful sync. /sync remains an explicit refresh.
+  const age = Date.now() - Date.parse(account.last_sync_at);
+  if (age >= 0 && age < ASSIGNMENT_REFRESH_FRESHNESS_MS) return;
 
   if (isVolpMaintenanceWindow()) {
     return send(env, chatId, VOLP_MAINTENANCE_MESSAGE);
