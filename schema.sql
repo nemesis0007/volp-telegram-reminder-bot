@@ -134,6 +134,10 @@ CREATE TABLE IF NOT EXISTS telemetry_installations (
 CREATE INDEX IF NOT EXISTS idx_assignments_upcoming
 ON assignments(chat_id, submitted, due_at);
 
+-- Upcoming lists include submitted work too: do not put submitted before the date range.
+CREATE INDEX IF NOT EXISTS idx_assignments_chat_due
+ON assignments(chat_id, due_at);
+
 CREATE INDEX IF NOT EXISTS idx_setup_tokens_expiry
 ON setup_tokens(expires_at);
 

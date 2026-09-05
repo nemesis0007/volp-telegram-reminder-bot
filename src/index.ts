@@ -645,17 +645,21 @@ async function sendAssignmentList(
   for (const part of messages) await send(env, chatId, part);
 }
 
-async function sendAssignments(env: Env, chatId: number) {
-  const rows = await env.DB.prepare(
+async function loadUpcomingAssignments(env: Env, chatId: number) {
+  return env.DB.prepare(
     `SELECT title,course,assignment_type,due_at,submitted
      FROM assignments
      WHERE chat_id=? AND due_at>?
      ORDER BY course COLLATE NOCASE,due_at`
   ).bind(chatId, new Date().toISOString()).all<StoredAssignment>();
+}
+
+async function sendAssignments(env: Env, chatId: number, saved?: StoredAssignment[]) {
+  const rows = saved ?? (await loadUpcomingAssignments(env, chatId)).results;
   return sendAssignmentList(
     env,
     chatId,
-    rows.results,
+    rows,
     "📚 <b>Upcoming assignments</b>",
     "No saved upcoming assignments found.",
     "Due"
@@ -663,9 +667,12 @@ async function sendAssignments(env: Env, chatId: number) {
 }
 
 async function showAssignmentsAndRefresh(env: Env, chatId: number) {
-  const account = await env.DB.prepare(
-    "SELECT last_sync_at FROM volp_accounts WHERE chat_id=?"
-  ).bind(chatId).first<{ last_sync_at: string | null }>();
+  // Independent reads overlap; neither waits for VOLP or mutates account state.
+  const [account, saved] = await Promise.all([
+    env.DB.prepare("SELECT last_sync_at FROM volp_accounts WHERE chat_id=?")
+      .bind(chatId).first<{ last_sync_at: string | null }>(),
+    loadUpcomingAssignments(env, chatId)
+  ]);
   if (!account) {
     return send(env, chatId, "Connect your VOLP account first with /connect.");
   }
@@ -674,7 +681,7 @@ async function showAssignmentsAndRefresh(env: Env, chatId: number) {
   }
 
   // Reply from D1 first so a slow VOLP request never delays the assignments button.
-  await sendAssignments(env, chatId);
+  await sendAssignments(env, chatId, saved.results);
 
 
   if (isVolpMaintenanceWindow()) {
@@ -1296,14 +1303,18 @@ async function startChunkedSync(env: Env, job: SyncRequestJob, force = false) {
 }
 
 async function processSyncCourseJob(env: Env, job: SyncCourseJob) {
-  const run = await env.DB.prepare(
-    "SELECT status,course_count FROM sync_runs WHERE run_id=? AND chat_id=?"
-  ).bind(job.runId, job.chatId).first<{ status: string; course_count: number }>();
-  if (!run || run.status !== "running") return;
+  // Read the run and its checkpoint together, retaining cancelled-run and retry checks.
   const courseRow = await env.DB.prepare(
-    "SELECT course_json,status FROM sync_run_courses WHERE run_id=? AND position=?"
-  ).bind(job.runId, job.position).first<{ course_json: string; status: string }>();
-  if (!courseRow) {
+    `SELECT r.status AS run_status,r.course_count,c.course_json,c.status
+     FROM sync_runs r LEFT JOIN sync_run_courses c
+       ON c.run_id=r.run_id AND c.position=?
+     WHERE r.run_id=? AND r.chat_id=?`
+  ).bind(job.position, job.runId, job.chatId).first<{
+    run_status: string; course_count: number; course_json: string | null; status: string | null;
+  }>();
+  if (!courseRow || courseRow.run_status !== "running") return;
+  const run = courseRow;
+  if (courseRow.course_json === null) {
     await enqueueNextSyncCourse(env, job, job.position + 1, run.course_count);
     return;
   }
