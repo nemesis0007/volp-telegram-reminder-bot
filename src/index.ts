@@ -65,7 +65,7 @@ const DEFAULT_REMINDER_HOURS = 1;
 const REMINDER_HOUR_OPTIONS = Array.from({ length: 10 }, (_, index) => index + 1);
 const DEFAULT_DIGEST_DAYS = 3;
 const DIGEST_DAY_OPTIONS = Array.from({ length: 5 }, (_, index) => index + 1);
-const SYNC_INTERVAL_MS = 3 * 60 * 60_000;
+const SYNC_INTERVAL_MS = 4 * 60 * 60_000;
 const SYNC_DISPATCH_GRACE_MS = 5 * 60_000;
 const MISSING_ASSIGNMENT_GRACE_MS = 24 * 60 * 60_000;
 const MAX_CONNECTED_ACCOUNTS = 90;
@@ -434,10 +434,10 @@ async function configureTelegram(env: Env, origin: string) {
       ]
     }),
     telegram(env, "setMyDescription", {
-      description: "Checks VOLP every 3 hours for upcoming assignments and sends private deadline reminders at the time you choose."
+      description: "Checks VOLP every 4 hours for upcoming assignments and sends private deadline reminders at the time you choose."
     }),
     telegram(env, "setMyShortDescription", {
-      short_description: "VOLP checks every 3 hours with personal deadline reminders."
+      short_description: "VOLP checks every 4 hours with personal deadline reminders."
     }),
     telegram(env, "setWebhook", {
       url: `${origin}/webhook/${env.WEBHOOK_SECRET}`,
@@ -715,7 +715,7 @@ async function deliverSyncResult(env: Env, chatId: number, initial = false) {
     env,
     chatId,
     initial
-      ? "✅ Your assignments are loaded. I’ll now check VOLP every 3 hours."
+      ? "✅ Your assignments are loaded. I’ll now check VOLP every 4 hours."
       : "✅ VOLP sync finished. Your assignment data is up to date."
   );
   return sendAssignments(env, chatId);
@@ -933,7 +933,7 @@ async function handleCommand(env: Env, chatId: number, text: string, origin: str
     return send(
       env,
       chatId,
-      `ℹ️ <b>About VOLP Assignment Reminder</b>\n\nI check VOLP every 3 hours, list upcoming hands-on and subjective assignments, and remind each user at their chosen time.\n\nVOLP session tokens and passwords are encrypted. The saved password is used only for automatic re-login. Use /disconnect to erase all stored credentials and data.`,
+      `ℹ️ <b>About VOLP Assignment Reminder</b>\n\nI check VOLP every 4 hours, list upcoming hands-on and subjective assignments, and remind each user at their chosen time.\n\nVOLP session tokens and passwords are encrypted. The saved password is used only for automatic re-login. Use /disconnect to erase all stored credentials and data.`,
       { inline_keyboard: [[{ text: "View source code", url: REPOSITORY_URL }]] }
     );
   }
@@ -1843,7 +1843,7 @@ async function connectSession(request: Request, env: Env) {
       env,
       claimedSetup.chat_id,
       `${accountChanged ? "🔄 VOLP account switched." : "✅ VOLP connected."} Automatic re-login is enabled with encrypted password storage.\n\n${initialSyncQueued
-        ? "I’ve queued your first assignment sync and will message you when it finishes. After that, I’ll check every 3 hours."
+        ? "I’ve queued your first assignment sync and will message you when it finishes. After that, I’ll check every 4 hours."
         : "I couldn’t queue your first assignment sync. Please send /sync in Telegram."}`
     );
     await showSettings(env, claimedSetup.chat_id);

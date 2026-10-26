@@ -39,8 +39,8 @@ settings, and troubleshooting.
 - Missed assignment history with `/missed`
 - Manual refresh with `/sync`
 - Retryable sync-completion delivery that never repeats a successful VOLP sync
-- Assignment checks every three hours
-- Immediate Telegram alerts when a three-hour check discovers new assignments
+- Assignment checks every four hours
+- Immediate Telegram alerts when a four-hour check discovers new assignments
 - An 8:00 AM IST summary of unsubmitted assignments due within three days
 - Reminder delivery evaluated every 15 minutes
 - A personal additional reminder choice from 1 to 10 hours before deadlines, plus the standard 1-hour reminder
@@ -130,7 +130,7 @@ npx wrangler d1 execute volp-reminder-bot --remote --command "SELECT COUNT(*) AS
 - VOLP has no documented public API. This project uses the same endpoints as its web client; they may change without notice.
 - The project is unaffiliated with VOLP or Vishwakarma Institute of Technology.
 - Do not use it to submit assignments or bypass access controls.
-- Respect Cloudflare and VOLP rate limits. The automatic sync interval is three hours.
+- Respect Cloudflare and VOLP rate limits. The automatic sync interval is four hours.
 - Automatic account syncs are processed as individual queue jobs with retries and
   limited concurrency, preventing one large cron invocation from exhausting its
   outbound-request limit.
